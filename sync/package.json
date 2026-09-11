@@ -1,0 +1,19 @@
+{
+  "name": "aurastream-sync",
+  "version": "1.0.0",
+  "description": "AuraStream real-time multi-client synchronization layer with NTP clock sync and jitter smoothing",
+  "main": "server.ts",
+  "scripts": {
+    "start": "node --loader ts-node/esm server.ts",
+    "test": "node --loader ts-node/esm tests/sync_system.test.ts"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.16.11",
+    "@types/ws": "^8.5.12",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.6.3"
+  }
+}

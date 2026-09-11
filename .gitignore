@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+**/node_modules/
+.venv/
+venv/
+env/
+
+# Build outputs
+build/
+bin/
+.next/
+**/.next/
+out/
+dist/
+*.tsbuildinfo
+
+# Python artifacts
+__pycache__/
+**/*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local session storage & uploads
+storage/sessions/*
+!storage/sessions/.gitkeep
+storage/uploads/*
+!storage/uploads/.gitkeep
+
+# Environment & credentials
+.env
+.env*.local
+*.pem
+*.key
+
+# Operating System
+.DS_Store
+Thumbs.db
+*.swp
+*~
