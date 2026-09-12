@@ -141,10 +141,27 @@ void BinauralConvolver::set_source_position(int source_id, float x, float y, flo
         src.is_crossfading = false;
         src.is_active = true;
     } else if (target_idx != src.active_hrir_idx) {
-        // Position changed to a different spatial bin: schedule dual-convolver cross-fade
+        // Position changed to a different spatial bin: schedule dual-convolver cross-fade.
+        // Re-targeting an already-pending fade is fine; it simply fades to the newest bin.
         src.target_hrir_idx = target_idx;
         src.is_crossfading = true;
+    } else {
+        // Back on the active bin. Cancel any fade still pending, otherwise a
+        // source that moves away and returns inside a single block would commit
+        // to the bin it has already left and stay there until moved again.
+        src.target_hrir_idx = target_idx;
+        src.is_crossfading = false;
     }
+}
+
+void BinauralConvolver::reset_source(int source_id) {
+    if (source_id < 0 || source_id >= static_cast<int>(MAX_AUDIO_SOURCES)) {
+        return;
+    }
+    // Clears the overlap-add tails as well as the gain and filter state. Without
+    // this the previous block's 511-sample convolution tail keeps bleeding into
+    // the output for four more blocks after a "reset".
+    sources_[source_id].reset();
 }
 
 void BinauralConvolver::process_audio(

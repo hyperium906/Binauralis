@@ -71,26 +71,23 @@ class LoudnessTelemetryAnalyzer:
         true_peak_dbfs = cls.compute_true_peak(data, sr, oversample_factor=4)
 
         # 2. Compute Integrated Loudness and Loudness Range
+        #
+        # Integrated loudness comes from pyloudnorm when available (it is
+        # validated against the BS.1770 compliance material). Loudness range is
+        # always computed here: pyloudnorm exposes no loudness_range function,
+        # so the previous call raised AttributeError into a bare except and
+        # every track reported an LRA of exactly 0.0.
         if HAS_PYLOUDNORM:
-            meter = pyln.Meter(sr)
-            # Integrated loudness
             try:
-                integrated_lufs = float(meter.integrated_loudness(data))
+                integrated_lufs = float(pyln.Meter(sr).integrated_loudness(data))
                 if math.isinf(integrated_lufs) or math.isnan(integrated_lufs):
                     integrated_lufs = -70.0
             except Exception:
-                integrated_lufs = -70.0
-
-            # Loudness Range (LRA)
-            try:
-                loudness_range_lu = float(pyln.loudness_range(data, sr))
-                if math.isinf(loudness_range_lu) or math.isnan(loudness_range_lu):
-                    loudness_range_lu = 0.0
-            except Exception:
-                loudness_range_lu = 0.0
+                integrated_lufs = cls._integrated_loudness(data, sr)
         else:
-            # Native ITU-R BS.1770-4 K-weighting calculation
-            integrated_lufs, loudness_range_lu = cls._native_bs1770_analysis(data, sr)
+            integrated_lufs = cls._integrated_loudness(data, sr)
+
+        loudness_range_lu = cls._loudness_range(data, sr)
 
         # Target compliance checks:
         # Spotify Target: -14 LUFS (tolerance ±1.0 LU)
@@ -110,82 +107,139 @@ class LoudnessTelemetryAnalyzer:
             is_ebu_r128_compliant=is_ebu_r128
         )
 
+    # ------------------------------------------------------------------
+    # ITU-R BS.1770-4 K-weighting
+    # ------------------------------------------------------------------
+
     @staticmethod
-    def _native_bs1770_analysis(data: np.ndarray, sr: int) -> Tuple[float, float]:
+    def _k_weight(data: np.ndarray, sr: int) -> np.ndarray:
         """
-        Pure NumPy / SciPy implementation of ITU-R BS.1770-4 K-weighting filter & gating.
+        Apply the two-stage BS.1770 K-weighting filter.
+
+        Stage 1 is a +4 dB high shelf, stage 2 the RLB high pass. Both are
+        designed with the RBJ biquad formulas at the signal's own sample rate,
+        which is how filters for rates other than 48 kHz are obtained.
+
+        The parameters below are the ones that reproduce the normative 48 kHz
+        coefficients in BS.1770-4 Tables 1 and 2 (agreement ~1e-4 on the shelf,
+        ~1e-16 on the high-pass denominator). They are not interchangeable with
+        other published parameter sets: designing the shelf at 1682 Hz instead
+        of 1500 Hz shifts the midband by a quarter of a decibel.
+
+        The previous implementation passed btype='highshelf' to
+        scipy.signal.iirfilter, which is not a valid band type — the function
+        raised ValueError on every call.
         """
-        if data.shape[0] < sr * 0.4:
-            return -70.0, 0.0
+        # --- Stage 1: high shelf, +4 dB, Q = 1/sqrt(2), fc = 1500 Hz
+        G, Q, fc = 4.0, 0.7071067811865475, 1500.0
+        A = 10.0 ** (G / 40.0)
+        w0 = 2.0 * np.pi * fc / sr
+        cw, sw = np.cos(w0), np.sin(w0)
+        sa = 2.0 * np.sqrt(A) * (sw / (2.0 * Q))
 
-        # Stage 1: High-shelf pre-filter (models head acoustic acoustics)
-        # Coefficients for 48kHz (scaled for arbitrary sr via bilinear)
-        b_shelf, a_shelf = signal.iirfilter(
-            2, 1680.0 / (sr / 2.0), btype='highshelf', ftype='butter', rs=4.0, output='ba'
-        )
-        # Stage 2: Highpass RLB filter (models human ear low-frequency roll-off)
-        b_rlb, a_rlb = signal.butter(2, 38.0 / (sr / 2.0), btype='highpass')
+        b_shelf = np.array([
+            A * ((A + 1) + (A - 1) * cw + sa),
+            -2.0 * A * ((A - 1) + (A + 1) * cw),
+            A * ((A + 1) + (A - 1) * cw - sa),
+        ])
+        a_shelf = np.array([
+            (A + 1) - (A - 1) * cw + sa,
+            2.0 * ((A - 1) - (A + 1) * cw),
+            (A + 1) - (A - 1) * cw - sa,
+        ])
+        b_shelf = b_shelf / a_shelf[0]
+        a_shelf = a_shelf / a_shelf[0]
 
-        # Apply cascade filters per channel
-        filtered = np.zeros_like(data)
+        # --- Stage 2: RLB high pass, Q = 0.50033, fc = 38.135 Hz.
+        # The numerator stays the spec's literal [1, -2, 1] while only the
+        # denominator is normalised. Scaling b by a0 as well — or using the RBJ
+        # (1+cos w0)/2 numerator — yields a unity-passband filter that sits a
+        # constant 0.043 dB below the normative one. That offset cancels in
+        # loudness range, which is a difference of percentiles, but it is free
+        # to get right here.
+        Q2, fc2 = 0.5003270373238773, 38.13547087602444
+        w0 = 2.0 * np.pi * fc2 / sr
+        cw, sw = np.cos(w0), np.sin(w0)
+        alpha = sw / (2.0 * Q2)
+
+        a0 = 1.0 + alpha
+        a_hp = np.array([1.0, -2.0 * cw / a0, (1.0 - alpha) / a0])
+        b_hp = np.array([1.0, -2.0, 1.0])
+
+        out = np.empty(data.shape, dtype=np.float64)
         for ch in range(data.shape[1]):
-            y1 = signal.lfilter(b_shelf, a_shelf, data[:, ch])
-            filtered[:, ch] = signal.lfilter(b_rlb, a_rlb, y1)
+            y = signal.lfilter(b_shelf, a_shelf, data[:, ch].astype(np.float64))
+            out[:, ch] = signal.lfilter(b_hp, a_hp, y)
+        return out
 
-        # 400ms blocks with 75% overlap (100ms hop)
-        block_len = int(0.4 * sr)
-        step_len = int(0.1 * sr)
+    @staticmethod
+    def _block_loudness(filtered: np.ndarray, sr: int, block_s: float, hop_s: float) -> np.ndarray:
+        """Loudness of every overlapping block, in LKFS. Channel weights are 1.0
+        for L/R/C, which covers mono and stereo."""
+        block_len = int(round(block_s * sr))
+        hop = max(1, int(round(hop_s * sr)))
+        if filtered.shape[0] < block_len:
+            return np.empty(0)
 
-        num_blocks = (filtered.shape[0] - block_len) // step_len
-        if num_blocks <= 0:
-            return -70.0, 0.0
+        n = 1 + (filtered.shape[0] - block_len) // hop
+        # Mean square per block per channel, via a cumulative sum so a long
+        # track does not turn into a Python loop over hundreds of thousands of
+        # windows.
+        sq = filtered ** 2
+        csum = np.concatenate([np.zeros((1, sq.shape[1])), np.cumsum(sq, axis=0)])
+        starts = np.arange(n) * hop
+        ms = (csum[starts + block_len] - csum[starts]) / block_len
+        return -0.691 + 10.0 * np.log10(np.sum(ms, axis=1) + 1e-12)
 
-        z_blocks = []
-        for i in range(num_blocks):
-            start = i * step_len
-            blk = filtered[start:start + block_len, :]
-            # Mean square energy per block across channels
-            ms = np.mean(blk ** 2, axis=0)
-            # Channel weighting (G_i = 1.0 for Left, Right, Center)
-            z = -0.691 + 10.0 * np.log10(np.sum(ms) + 1e-12)
-            z_blocks.append(z)
+    @classmethod
+    def _integrated_loudness(cls, data: np.ndarray, sr: int) -> float:
+        """BS.1770-4 gated integrated loudness: 400 ms blocks at 75% overlap,
+        absolute gate at -70 LUFS, relative gate 10 LU below the ungated mean."""
+        z = cls._block_loudness(cls._k_weight(data, sr), sr, 0.400, 0.100)
+        if z.size == 0:
+            return -70.0
 
-        z_blocks = np.array(z_blocks)
+        above = z[z > -70.0]
+        if above.size == 0:
+            return -70.0
 
-        # Absolute threshold gating at -70 LUFS
-        valid_abs = z_blocks[z_blocks > -70.0]
-        if len(valid_abs) == 0:
-            return -70.0, 0.0
+        mean_pow = np.mean(10.0 ** ((above + 0.691) / 10.0))
+        gamma = (-0.691 + 10.0 * np.log10(mean_pow + 1e-12)) - 10.0
 
-        # Relative threshold gating at -10 LU below unweighted mean
-        z_ungated = -0.691 + 10.0 * np.log10(np.mean(10.0 ** ((valid_abs + 0.691) / 10.0)) + 1e-12)
-        gamma_rel = z_ungated - 10.0
+        gated = above[above > gamma]
+        if gated.size == 0:
+            return -70.0
 
-        valid_rel = valid_abs[valid_abs > gamma_rel]
-        if len(valid_rel) == 0:
-            return -70.0, 0.0
+        return float(-0.691 + 10.0 * np.log10(np.mean(10.0 ** ((gated + 0.691) / 10.0)) + 1e-12))
 
-        integrated_lufs = -0.691 + 10.0 * np.log10(np.mean(10.0 ** ((valid_rel + 0.691) / 10.0)) + 1e-12)
+    @classmethod
+    def _loudness_range(cls, data: np.ndarray, sr: int) -> float:
+        """
+        EBU Tech 3342 loudness range.
 
-        # Loudness range (LRA): 3000ms short-term blocks
-        st_block_len = int(3.0 * sr)
-        st_step_len = int(1.0 * sr)
-        st_blocks = (filtered.shape[0] - st_block_len) // st_step_len
-        if st_blocks > 1:
-            st_lufs = []
-            for i in range(st_blocks):
-                st_b = filtered[i * st_step_len : i * st_step_len + st_block_len, :]
-                ms = np.mean(st_b ** 2, axis=0)
-                st_lufs.append(-0.691 + 10.0 * np.log10(np.sum(ms) + 1e-12))
-            st_lufs = np.array(st_lufs)
-            st_valid = st_lufs[st_lufs > -70.0]
-            if len(st_valid) > 1:
-                p10 = np.percentile(st_valid, 10)
-                p95 = np.percentile(st_valid, 95)
-                lra = float(max(0.0, p95 - p10))
-            else:
-                lra = 0.0
-        else:
-            lra = 0.0
+        Short-term (3 s) loudness on a 1 s grid, gated absolutely at -70 LUFS
+        and then relatively at 20 LU below the mean of what survives. LRA is the
+        spread between the 10th and 95th percentiles of the remainder.
 
-        return float(integrated_lufs), float(lra)
+        Note the relative gate is -20 LU here, not the -10 LU used for
+        integrated loudness; they are different measurements.
+        """
+        if data.shape[0] < int(3.0 * sr):
+            return 0.0
+
+        st = cls._block_loudness(cls._k_weight(data, sr), sr, 3.0, 1.0)
+        if st.size == 0:
+            return 0.0
+
+        above = st[st > -70.0]
+        if above.size < 2:
+            return 0.0
+
+        mean_pow = np.mean(10.0 ** ((above + 0.691) / 10.0))
+        gamma = (-0.691 + 10.0 * np.log10(mean_pow + 1e-12)) - 20.0
+
+        gated = above[above > gamma]
+        if gated.size < 2:
+            return 0.0
+
+        return float(max(0.0, np.percentile(gated, 95) - np.percentile(gated, 10)))

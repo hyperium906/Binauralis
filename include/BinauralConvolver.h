@@ -136,6 +136,17 @@ public:
      */
     void set_hrir_direction(int pos_index, float azimuth_rad, float elevation_rad);
 
+    /**
+     * @brief Clear all state for a source: overlap-add tails, gain ramp,
+     * filter selection and active flag.
+     *
+     * Not real-time safe to call concurrently with process_audio() for the same
+     * source; call it while that source is silent.
+     *
+     * @param source_id Source index [0, MAX_AUDIO_SOURCES - 1].
+     */
+    void reset_source(int source_id);
+
     int sample_rate() const { return sample_rate_; }
     int num_positions() const { return num_positions_; }
 

@@ -241,6 +241,120 @@ bool test_distance_attenuation() {
 
 // ============================================================================
 // Test 6: Performance Benchmark
+
+// ============================================================================
+// Test 6: Source Reset Clears Overlap-Add Tails
+// Regression: reset_source() used to be implemented as a set_source_position()
+// call, which never touched the overlap buffers. The previous block's
+// 511-sample convolution tail kept bleeding into the output for four more
+// blocks after a documented "reset".
+// ============================================================================
+bool test_reset_clears_tail() {
+    std::cout << "[Test 6] Source Reset Clears Convolution Tail... ";
+    AuraStream::BinauralConvolver engine(48000);
+
+    // A dense 512-tap filter so a single block leaves a long, loud tail.
+    constexpr int filter_len = 512;
+    constexpr int num_pos = 4;
+    std::vector<float> hrir_l(num_pos * filter_len, 0.1f);
+    std::vector<float> hrir_r(num_pos * filter_len, 0.1f);
+    engine.load_hrir_table(hrir_l.data(), hrir_r.data(), num_pos, filter_len);
+
+    float in_buf[128], out_l[128], out_r[128];
+    for (int i = 0; i < 128; ++i) in_buf[i] = 1.0f;
+
+    engine.set_source_position(0, 0.0f, 1.0f, 0.0f);
+    engine.process_audio(0, in_buf, out_l, out_r, 128);
+
+    engine.reset_source(0);
+
+    // Every block from here on is silent input; the output must be silent too.
+    for (int i = 0; i < 128; ++i) in_buf[i] = 0.0f;
+    float worst = 0.0f;
+    for (int blk = 0; blk < 5; ++blk) {
+        engine.process_audio(0, in_buf, out_l, out_r, 128);
+        for (int i = 0; i < 128; ++i) {
+            worst = std::max(worst, std::fabs(out_l[i]));
+            worst = std::max(worst, std::fabs(out_r[i]));
+        }
+    }
+
+    if (worst > 1e-9f) {
+        std::cerr << "FAILED! Tail still bleeding after reset_source(): peak " << worst << std::endl;
+        return false;
+    }
+
+    // Out-of-range ids must be a harmless no-op.
+    engine.reset_source(-1);
+    engine.reset_source(100000);
+
+    std::cout << "PASSED (Silent after reset, peak " << worst << ")" << std::endl;
+    return true;
+}
+
+// ============================================================================
+// Test 7: Pending Cross-Fade Is Cancelled On Return To The Active Bin
+// Regression: moving a source to a new HRIR bin and back again before the next
+// block was rendered left target_hrir_idx pointing at the bin the source had
+// already left. The next block committed to that stale bin and stayed there
+// until the source was moved again.
+// ============================================================================
+bool test_crossfade_target_not_stale() {
+    std::cout << "[Test 7] Cross-Fade Target Follows The Source... ";
+    AuraStream::BinauralConvolver engine(48000);
+
+    // Bin p carries its impulse at tap p*8, so the filter in use can be read
+    // straight off the impulse response.
+    constexpr int filter_len = 512;
+    constexpr int num_pos = 4;   // azimuths: behind, left, front, right
+    std::vector<float> hrir_l(num_pos * filter_len, 0.0f);
+    std::vector<float> hrir_r(num_pos * filter_len, 0.0f);
+    for (int p = 0; p < num_pos; ++p) {
+        hrir_l[p * filter_len + p * 8] = 1.0f;
+        hrir_r[p * filter_len + p * 8] = 1.0f;
+    }
+    engine.load_hrir_table(hrir_l.data(), hrir_r.data(), num_pos, filter_len);
+
+    float in_buf[128], out_l[128], out_r[128];
+    auto active_bin = [&]() -> int {
+        for (int i = 0; i < 128; ++i) in_buf[i] = 0.0f;
+        in_buf[0] = 1.0f;
+        engine.process_audio(0, in_buf, out_l, out_r, 128);
+        for (int i = 0; i < 128; ++i) {
+            if (std::fabs(out_l[i]) > 0.5f) return i / 8;
+        }
+        return -1;
+    };
+
+    engine.set_source_position(0, 0.0f, 1.0f, 0.0f);   // front -> bin 2
+    const int start = active_bin();
+
+    // Move away and straight back, inside a single block.
+    engine.set_source_position(0, 1.0f, 0.0f, 0.0f);   // right, schedules a fade
+    engine.set_source_position(0, 0.0f, 1.0f, 0.0f);   // back to front
+
+    if (active_bin() != start || active_bin() != start) {
+        std::cerr << "FAILED! Source drifted off its own bin after an out-and-back move."
+                  << std::endl;
+        return false;
+    }
+
+    // A genuine bin change must still cross-fade and land on the new bin. The
+    // first block IS the fade, so it is still led by the outgoing filter.
+    engine.set_source_position(0, 1.0f, 0.0f, 0.0f);   // right -> bin 3
+    const int during = active_bin();
+    const int settled = active_bin();
+
+    if (during != start || settled != 3) {
+        std::cerr << "FAILED! Expected fade from bin " << start << " to 3, saw "
+                  << during << " then " << settled << std::endl;
+        return false;
+    }
+
+    std::cout << "PASSED (Stale target cancelled, real moves still cross-fade)" << std::endl;
+    return true;
+}
+
 // ============================================================================
 void run_performance_benchmark() {
     std::cout << "\n===========================================================" << std::endl;
@@ -293,6 +407,8 @@ int main() {
     assert(test_realtime_zero_allocation());
     assert(test_anticlick_crossfade());
     assert(test_distance_attenuation());
+    assert(test_reset_clears_tail());
+    assert(test_crossfade_target_not_stale());
 
     run_performance_benchmark();
 

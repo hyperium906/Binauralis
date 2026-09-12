@@ -50,9 +50,8 @@ void set_hrir_direction(int pos_index, float azimuth_rad, float elevation_rad) {
 }
 
 void reset_source(int source_id) {
-    // Re-setting source position at origin resets the internal state
     if (g_engine) {
-        g_engine->set_source_position(source_id, 0.0f, 1.0f, 0.0f);
+        g_engine->reset_source(source_id);
     }
 }
 
