@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" fill="none">
+  <defs>
+    <radialGradient id="chamber" cx="62%" cy="32%" r="82%">
+      <stop offset="0%" stop-color="#161C27"/><stop offset="58%" stop-color="#0B0F16"/>
+      <stop offset="100%" stop-color="#06080B"/>
+    </radialGradient>
+    <clipPath id="stI"><circle cx="256" cy="256" r="216.06"/></clipPath>
+  </defs>
+  <rect width="512" height="512" rx="114" fill="url(#chamber)"/>
+  <rect x="1" y="1" width="510" height="510" rx="113" stroke="#FFFFFF" stroke-opacity="0.07" stroke-width="2"/>
+  <circle cx="256" cy="256" r="216.06" stroke="#2A3441" stroke-width="8.00" fill="none"/>
+  <g stroke="#2A3441" stroke-width="8.00" stroke-linecap="round">
+    <path d="M 256 39.94 v 35.20"/><path d="M 256 472.06 v -35.20"/>
+    <path d="M 39.94 256 h 35.20"/><path d="M 472.06 256 h -35.20"/>
+  </g>
+  <g clip-path="url(#stI)" fill="none" stroke="#8FE6FF" stroke-linecap="round">
+    <path d="M 404.96 -248.19 a 379.19 379.19 0 1 0 0.01 0" stroke-width="10.40" opacity="0.14"/>
+    <path d="M 404.96 -145.12 a 276.13 276.13 0 1 0 0.01 0" stroke-width="15.20" opacity="0.34"/>
+    <path d="M 404.96 -63.45 a 194.46 194.46 0 1 0 0.01 0" stroke-width="22.40" opacity="1.0"/>
+  </g>
+  <circle cx="404.96" cy="131.01" r="66" fill="#8FE6FF" opacity="0.11"/>
+  <circle cx="404.96" cy="131.01" r="40" fill="#8FE6FF" opacity="0.24"/>
+  <circle cx="404.96" cy="131.01" r="24" fill="#FFFFFF"/>
+  <circle cx="256" cy="256" r="40" fill="#06080B"/>
+  <circle cx="256" cy="256" r="40" stroke="#E8F3FF" stroke-width="15" fill="none"/>
+</svg>

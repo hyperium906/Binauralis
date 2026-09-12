@@ -1,473 +1,648 @@
+/* ==========================================================================
+   AuraStream — the anechoic chamber
+   A room lined to kill every reflection, lit cold, with one calibrated
+   source in it. Surfaces are matte and flat. Light has a white core and a
+   coloured falloff. Every line is a measurement line or it is deleted.
+   ========================================================================== */
+
 :root {
-    --bg-base: #07090e;
-    --bg-surface: rgba(15, 21, 33, 0.75);
-    --bg-surface-hover: rgba(22, 30, 48, 0.85);
-    --border-subtle: rgba(255, 255, 255, 0.08);
-    --border-bright: rgba(0, 242, 254, 0.3);
+    /* Chamber ------------------------------------------------------------ */
+    --void:        #06080B;   /* the room */
+    --wedge:       #0D1118;   /* panel face */
+    --wedge-rise:  #131925;   /* panel, raised or hovered */
+    --graticule:   #222A36;   /* measurement hairline */
+    --graticule-l: #2F3A49;   /* hairline, emphasised */
 
-    --accent-cyan: #00f2fe;
-    --accent-blue: #4facfe;
-    --accent-magenta: #ff007f;
-    --accent-gold: #ffaa00;
-    --accent-emerald: #00ff88;
-    --accent-purple: #9d4edd;
+    /* Light -------------------------------------------------------------- */
+    --signal:      #E8F3FF;   /* calibrated light: near-white, cold cast */
+    --signal-dim:  #8A99AC;   /* legible secondary */
+    --signal-mute: #55616F;   /* labels, units, axis text */
+    --caution:     #FFAE3D;   /* threshold and over only. never decoration. */
 
-    --text-primary: #f8fafc;
-    --text-secondary: #94a3b8;
-    --text-muted: #64748b;
+    /* Stems, ordered by spectral centroid: low frequencies are deep and
+       saturated, high frequencies approach the colour of the light itself. */
+    --stem-bass:   #7C4DFF;
+    --stem-drums:  #4A7CF8;
+    --stem-other:  #2FB6E9;
+    --stem-vocals: #8FE6FF;
 
-    --font-heading: 'Outfit', sans-serif;
-    --font-mono: 'JetBrains Mono', monospace;
+    /* Type --------------------------------------------------------------- */
+    --ui:   'Archivo', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+    --num:  'Azeret Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+
+    /* Metrics ------------------------------------------------------------ */
+    --rail:   16px;
+    --gut:    20px;
+    --hair:   1px solid var(--graticule);
 }
 
-* {
-    box-sizing: border-box;
-    margin: 0;
-    padding: 0;
-}
+* { box-sizing: border-box; margin: 0; padding: 0; }
 
 html, body {
     width: 100%;
     height: 100%;
-    background-color: var(--bg-base);
-    color: var(--text-primary);
-    font-family: var(--font-heading);
+    background: var(--void);
+    color: var(--signal);
+    font-family: var(--ui);
+    font-size: 14px;
+    line-height: 1.45;
     overflow: hidden;
-    user-select: none;
-    background-image:
-        radial-gradient(circle at 10% 15%, rgba(0, 242, 254, 0.05) 0%, transparent 40%),
-        radial-gradient(circle at 90% 85%, rgba(157, 78, 221, 0.05) 0%, transparent 40%);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
 }
 
-.aurastream-app-layout {
-    display: flex;
-    flex-direction: column;
+body { user-select: none; }
+
+/* Numbers get tabular figures everywhere so digits do not jitter while a
+   stem is being dragged. This is the only reason a mono face is here. */
+.num {
+    font-family: var(--num);
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: 'tnum' 1;
+}
+
+:focus-visible {
+    outline: 2px solid var(--stem-vocals);
+    outline-offset: 2px;
+    border-radius: 2px;
+}
+
+/* ==========================================================================
+   Frame
+   ========================================================================== */
+
+.chamber {
+    display: grid;
+    grid-template-rows: 52px minmax(0, 1fr) auto;
     height: 100vh;
     width: 100vw;
 }
 
-/* Header */
-.app-header {
-    height: 64px;
-    padding: 0 2rem;
+/* --- Masthead ----------------------------------------------------------- */
+
+.masthead {
     display: flex;
+    align-items: center;
     justify-content: space-between;
-    align-items: center;
-    border-bottom: 1px solid var(--border-subtle);
-    background: rgba(7, 9, 14, 0.85);
-    backdrop-filter: blur(16px);
-    z-index: 10;
+    padding: 0 var(--gut);
+    border-bottom: var(--hair);
+    background: var(--void);
 }
 
-.brand-wrapper {
+.ident { display: flex; align-items: center; gap: 10px; }
+.ident img { width: 26px; height: 26px; display: block; }
+
+.ident h1 {
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: -0.2px;
+    color: var(--signal);
+}
+
+.ident span {
+    font-size: 12px;
+    font-weight: 400;
+    color: var(--signal-mute);
+    letter-spacing: 0;
+}
+
+.rate {
     display: flex;
     align-items: center;
-    gap: 0.75rem;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--signal-dim);
 }
 
-.brand-logo-img {
-    width: 32px;
-    height: 32px;
-    filter: drop-shadow(0 0 8px rgba(0, 242, 254, 0.45));
-    transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), filter 0.3s ease;
+.rate b {
+    font-weight: 500;
+    color: var(--signal);
 }
 
-.brand-logo-img:hover {
-    transform: scale(1.08) rotate(3deg);
-    filter: drop-shadow(0 0 14px rgba(255, 0, 127, 0.7));
+/* A lamp, not a badge. Lit means the engine is running. */
+.lamp {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--stem-vocals);
+    box-shadow: 0 0 0 3px rgba(143, 230, 255, 0.12);
 }
 
-.brand-title {
-    font-size: 1.25rem;
-    font-weight: 700;
-    letter-spacing: -0.5px;
-    background: linear-gradient(135deg, var(--accent-cyan), var(--accent-purple));
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
+.lamp[data-state='idle'] {
+    background: var(--signal-mute);
+    box-shadow: none;
 }
 
-.badge-status {
-    font-family: var(--font-mono);
-    font-size: 0.75rem;
-    padding: 0.35rem 0.75rem;
-    border-radius: 999px;
-    background: rgba(0, 242, 254, 0.1);
-    color: var(--accent-cyan);
-    border: 1px solid var(--border-bright);
-}
+/* --- Working area ------------------------------------------------------- */
 
-/* Main Viewport Grid */
-.app-main-grid {
-    flex: 1;
+.bench {
     display: grid;
-    grid-template-columns: 1fr 400px;
-    gap: 1.5rem;
-    padding: 1.5rem 2rem;
+    grid-template-columns: minmax(0, 1fr) 340px;
     min-height: 0;
-    position: relative;
 }
 
-/* 3D Canvas Card */
-.canvas-card {
-    background: var(--bg-surface);
-    border: 1px solid var(--border-subtle);
-    border-radius: 24px;
-    overflow: hidden;
+.stage {
     position: relative;
-    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
-    backdrop-filter: blur(20px);
+    min-width: 0;
+    min-height: 0;
+    border-right: var(--hair);
 }
 
-.canvas-overlay-instruction {
+.stage canvas { display: block; }
+
+/* Instruction sits in the dead lower-left of the stage, out of the way of
+   the nodes, and fades once the user has moved something. */
+.stage-note {
     position: absolute;
-    top: 1.25rem;
-    left: 1.5rem;
-    z-index: 5;
+    left: var(--gut);
+    bottom: var(--gut);
+    max-width: 30ch;
     pointer-events: none;
+    transition: opacity 600ms ease;
 }
 
-.instruction-title {
-    font-size: 1rem;
-    font-weight: 600;
-    color: var(--text-primary);
+.stage-note p {
+    font-size: 12px;
+    color: var(--signal-dim);
+    line-height: 1.5;
+    padding: 9px 12px;
+    background: rgba(6, 8, 11, 0.72);
+    backdrop-filter: blur(3px);
+    border-left: 2px solid var(--graticule-l);
 }
 
-.instruction-sub {
-    font-size: 0.8rem;
-    color: var(--text-muted);
-    margin-top: 0.2rem;
-}
+.stage-note[data-touched='true'] { opacity: 0; }
 
-/* Telemetry HUD Container */
-.telemetry-hud-container {
+/* ==========================================================================
+   Readout
+   ========================================================================== */
+
+.readout {
     display: flex;
     flex-direction: column;
-    gap: 1.25rem;
     min-height: 0;
     overflow-y: auto;
+    background: var(--void);
 }
 
-.hud-tabs {
+.readout section { border-bottom: var(--hair); padding: 14px var(--gut) 18px; }
+.readout section:last-child { border-bottom: 0; }
+
+.sect-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: 14px;
+}
+
+.sect-head h2 {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--signal);
+    letter-spacing: 0;
+}
+
+.sect-head .spec {
+    font-size: 11px;
+    color: var(--signal-mute);
+}
+
+/* --- Stem picker: four channel strips ----------------------------------- */
+
+.picker {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
-    gap: 0.5rem;
+    border: var(--hair);
 }
 
-.hud-tab-btn {
-    background: rgba(255, 255, 255, 0.03);
-    border: 1px solid var(--border-subtle);
-    border-radius: 12px;
-    padding: 0.6rem 0.2rem;
-    font-family: var(--font-heading);
-    font-weight: 600;
-    font-size: 0.75rem;
+.strip {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 5px;
+    padding: 9px 8px 10px;
+    background: transparent;
+    border: 0;
+    border-right: var(--hair);
+    color: var(--signal-mute);
+    font-family: var(--ui);
+    font-size: 11px;
+    font-weight: 500;
+    text-align: left;
     cursor: pointer;
-    transition: all 0.2s ease;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 0.35rem;
+    transition: background 140ms ease, color 140ms ease;
 }
 
-.hud-tab-btn:hover {
-    background: rgba(255, 255, 255, 0.08);
+.strip:last-child { border-right: 0; }
+.strip:hover { background: var(--wedge); color: var(--signal-dim); }
+
+.strip[aria-pressed='true'] {
+    background: var(--wedge-rise);
+    color: var(--signal);
 }
 
-.hud-tab-btn.active {
-    background: rgba(255, 255, 255, 0.08);
-    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+/* The colour bar is the channel's identity — it carries the stem hue, so the
+   label itself never needs to be coloured. */
+.strip i {
+    display: block;
+    width: 100%;
+    height: 2px;
+    background: currentColor;
+    opacity: 0.28;
+    transition: opacity 140ms ease;
 }
 
-.tab-indicator {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
+.strip[aria-pressed='true'] i { opacity: 1; }
+
+.strip em {
+    font-style: normal;
+    font-variant-numeric: tabular-nums;
+    font-family: var(--num);
+    font-size: 10px;
+    color: var(--signal-mute);
 }
 
-.hud-card {
-    background: var(--bg-surface);
-    border: 1px solid var(--border-subtle);
-    border-radius: 20px;
-    padding: 1.25rem 1.4rem;
-    backdrop-filter: blur(20px);
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
-}
+/* --- Coordinate readout -------------------------------------------------- */
 
-.hud-card-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 1rem;
-}
-
-.stem-title-badge {
-    font-size: 0.95rem;
-    font-weight: 700;
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-}
-
-.pulsing-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    box-shadow: 0 0 10px currentColor;
-    animation: pulseGlow 1.8s infinite;
-}
-
-@keyframes pulseGlow {
-    0%, 100% { transform: scale(1); opacity: 0.8; }
-    50% { transform: scale(1.4); opacity: 1; }
-}
-
-.hud-direction-badge {
-    font-family: var(--font-mono);
-    font-size: 0.75rem;
-    background: rgba(255, 255, 255, 0.05);
-    padding: 0.25rem 0.6rem;
-    border-radius: 6px;
-    color: var(--text-secondary);
-}
-
-.telemetry-grid {
+.axes {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
-    gap: 0.75rem;
+    gap: 1px;
+    background: var(--graticule);
+    border: var(--hair);
 }
 
-.telemetry-item {
-    background: rgba(0, 0, 0, 0.25);
-    border: 1px solid rgba(255, 255, 255, 0.04);
-    border-radius: 10px;
-    padding: 0.65rem;
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
+.axis {
+    background: var(--void);
+    padding: 9px 10px 10px;
 }
 
-.telemetry-label {
-    font-family: var(--font-mono);
-    font-size: 0.65rem;
-    color: var(--text-muted);
+.axis dt {
+    font-size: 10px;
+    color: var(--signal-mute);
+    margin-bottom: 3px;
 }
 
-.telemetry-val {
-    font-family: var(--font-mono);
-    font-size: 0.95rem;
-    font-weight: 600;
-    color: var(--text-primary);
+.axis dd {
+    font-family: var(--num);
+    font-variant-numeric: tabular-nums;
+    font-size: 16px;
+    font-weight: 500;
+    color: var(--signal);
+    letter-spacing: -0.4px;
 }
 
-.telemetry-val-large {
-    font-family: var(--font-mono);
-    font-size: 1.15rem;
-    font-weight: 700;
-    color: var(--text-primary);
-    margin-top: 0.2rem;
-}
-
-.unit {
-    font-size: 0.7rem;
-    color: var(--text-muted);
-    margin-left: 0.25rem;
+.axis dd u {
+    text-decoration: none;
+    font-size: 10px;
     font-weight: 400;
+    color: var(--signal-mute);
+    margin-left: 2px;
 }
 
-.clip-badge {
-    font-family: var(--font-mono);
-    font-size: 0.7rem;
-    font-weight: 700;
-    color: #ff007f;
-    background: rgba(255, 0, 127, 0.15);
-    padding: 0.2rem 0.5rem;
-    border-radius: 4px;
-    animation: blink 0.5s infinite;
+.axes + .axes { margin-top: 10px; }
+
+/* --- Bearing dial: the azimuth, drawn --------------------------------- */
+
+.bearing {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: var(--hair);
 }
 
-@keyframes blink {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.3; }
+.bearing svg { flex: none; }
+
+.bearing-text { min-width: 0; }
+
+.bearing-text strong {
+    display: block;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--signal);
 }
 
-.loudness-metrics-row {
+.bearing-text span {
+    display: block;
+    margin-top: 2px;
+    font-size: 11px;
+    line-height: 1.4;
+    color: var(--signal-mute);
+}
+
+/* --- Loudness ----------------------------------------------------------- */
+
+.levels {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
-    gap: 0.75rem;
-    margin-bottom: 1.25rem;
+    gap: 1px;
+    background: var(--graticule);
+    border: var(--hair);
+    margin-bottom: 16px;
 }
 
-.lufs-meter-bar-wrapper {
-    display: flex;
-    flex-direction: column;
-    gap: 0.4rem;
+.level { background: var(--void); padding: 9px 10px 10px; }
+
+.level dt { font-size: 10px; color: var(--signal-mute); margin-bottom: 3px; }
+
+.level dd {
+    font-family: var(--num);
+    font-variant-numeric: tabular-nums;
+    font-size: 18px;
+    font-weight: 500;
+    letter-spacing: -0.5px;
+    color: var(--signal);
 }
 
-.meter-scale-markers {
-    display: flex;
-    justify-content: space-between;
-    font-family: var(--font-mono);
-    font-size: 0.65rem;
-    color: var(--text-muted);
+.level dd u {
+    text-decoration: none;
+    font-size: 10px;
+    font-weight: 400;
+    color: var(--signal-mute);
+    margin-left: 3px;
 }
+
+.level[data-over='true'] dd { color: var(--caution); }
+
+.over {
+    font-family: var(--num);
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--void);
+    background: var(--caution);
+    padding: 2px 6px;
+}
+
+/* Meter: a scale with ticks, read left to right, like a real one. */
+.meter { margin-top: 4px; }
 
 .meter-track {
-    height: 12px;
-    background: rgba(0, 0, 0, 0.4);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 6px;
     position: relative;
+    height: 8px;
+    background: var(--wedge);
+    border: var(--hair);
     overflow: hidden;
 }
 
-.meter-fill-bar {
-    height: 100%;
-    background: linear-gradient(90deg, #00f2fe 60%, #ffaa00 80%, #ff007f 100%);
-    border-radius: 5px;
-    transition: width 0.06s ease-out;
+.meter-fill {
+    position: absolute;
+    inset: 0 auto 0 0;
+    background: var(--stem-other);
+    transition: width 90ms linear;
 }
 
-.meter-target-tick {
+.meter-fill[data-over='true'] { background: var(--caution); }
+
+.meter-tick {
+    position: absolute;
+    top: -1px;
+    bottom: -1px;
+    width: 1px;
+    background: var(--signal);
+    opacity: 0.55;
+}
+
+.meter-scale {
+    position: relative;
+    height: 15px;
+    margin-top: 4px;
+}
+
+.meter-scale span {
     position: absolute;
     top: 0;
-    bottom: 0;
-    width: 2px;
-    background: #ffffff;
-    opacity: 0.75;
-    z-index: 2;
+    transform: translateX(-50%);
+    font-family: var(--num);
+    font-size: 9px;
+    color: var(--signal-mute);
+    white-space: nowrap;
 }
 
-.meter-target-tick.spotify-target {
-    background: var(--accent-cyan);
-    box-shadow: 0 0 6px var(--accent-cyan);
-    width: 2px;
+.meter-scale span[data-target='true'] { color: var(--signal-dim); }
+
+.meter-key {
+    margin-top: 2px;
+    font-size: 10px;
+    color: var(--signal-mute);
 }
 
-/* Master Transport Bar */
-.transport-master-container {
-    height: 80px;
-    padding: 0 2rem;
-    border-top: 1px solid var(--border-subtle);
-    background: rgba(7, 9, 14, 0.85);
-    backdrop-filter: blur(16px);
-    display: flex;
+/* --- Per-source levels -------------------------------------------------- */
+
+.sources { list-style: none; }
+
+.sources li + li { margin-top: 1px; }
+
+.sources button {
+    display: grid;
+    grid-template-columns: 78px minmax(0, 1fr);
     align-items: center;
-    justify-content: space-between;
-    z-index: 10;
-}
-
-.transport-playback-cluster {
-    display: flex;
-    align-items: center;
-    gap: 1.2rem;
-    flex: 1;
-    max-width: 600px;
-}
-
-.transport-btn {
-    font-family: var(--font-heading);
-    font-size: 0.85rem;
-    font-weight: 700;
-    padding: 0.65rem 1.4rem;
-    border-radius: 12px;
-    border: none;
-    cursor: pointer;
-    transition: all 0.2s;
-}
-
-.play-btn {
-    background: linear-gradient(135deg, var(--accent-cyan), var(--accent-blue));
-    color: #05101a;
-    box-shadow: 0 4px 15px rgba(0, 242, 254, 0.25);
-}
-
-.play-btn:hover {
-    transform: translateY(-1px);
-    box-shadow: 0 6px 20px rgba(0, 242, 254, 0.4);
-}
-
-.stop-btn {
-    background: rgba(255, 255, 255, 0.06);
-    color: var(--text-primary);
-    border: 1px solid var(--border-subtle);
-}
-
-.stop-btn:hover {
-    background: rgba(255, 255, 255, 0.1);
-}
-
-.transport-time-display {
-    font-family: var(--font-mono);
-    font-size: 0.8rem;
-    display: flex;
-    align-items: center;
-    gap: 0.25rem;
-}
-
-.current-time {
-    color: var(--text-primary);
-    font-weight: 600;
-}
-
-.time-separator, .duration-time {
-    color: var(--text-muted);
-}
-
-.seek-bar {
-    flex: 1;
-    accent-color: var(--accent-cyan);
-    cursor: pointer;
-}
-
-.transport-stem-mixers {
-    display: flex;
-    align-items: center;
-    gap: 1.5rem;
-}
-
-.stem-mixer-strip {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    background: rgba(255, 255, 255, 0.03);
-    padding: 0.4rem 0.75rem;
-    border-radius: 10px;
-    border: 1px solid var(--border-subtle);
-}
-
-.mixer-dot {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-}
-
-.mixer-name {
-    font-family: var(--font-mono);
-    font-size: 0.7rem;
-    font-weight: 600;
-    color: var(--text-secondary);
-}
-
-.volume-slider {
-    width: 60px;
-    cursor: pointer;
-}
-
-.mute-btn {
+    gap: 10px;
+    width: 100%;
+    padding: 6px 8px;
     background: transparent;
-    border: 1px solid var(--border-subtle);
-    color: var(--text-muted);
-    font-family: var(--font-mono);
-    font-size: 0.65rem;
-    font-weight: 700;
-    padding: 0.2rem 0.4rem;
-    border-radius: 4px;
+    border: 0;
     cursor: pointer;
-    transition: all 0.15s;
+    text-align: left;
+    transition: background 120ms ease;
 }
 
-.mute-btn.muted {
-    background: #ff007f;
-    color: #ffffff;
-    border-color: #ff007f;
+.sources button:hover { background: var(--wedge); }
+.sources li[data-active='true'] button { background: var(--wedge-rise); }
+
+.src-name {
+    font-family: var(--ui);
+    font-size: 11px;
+    color: var(--signal-dim);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.sources li[data-active='true'] .src-name { color: var(--signal); }
+
+.src-bar {
+    position: relative;
+    display: block;
+    height: 4px;
+    background: var(--wedge-rise);
+    overflow: hidden;
+}
+
+.sources li[data-active='true'] .src-bar { background: #1b2331; }
+
+.src-bar span {
+    position: absolute;
+    inset: 0 auto 0 0;
+    transition: width 80ms linear;
+}
+
+/* ==========================================================================
+   Transport
+   ========================================================================== */
+
+.transport {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: var(--gut);
+    padding: 10px var(--gut);
+    border-top: var(--hair);
+    background: var(--void);
+}
+
+.deck { display: flex; align-items: center; gap: 12px; min-width: 0; }
+
+.key {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 30px;
+    background: var(--wedge);
+    border: var(--hair);
+    color: var(--signal-dim);
+    cursor: pointer;
+    transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.key:hover { background: var(--wedge-rise); color: var(--signal); }
+
+.key[data-lit='true'] {
+    background: var(--signal);
+    border-color: var(--signal);
+    color: var(--void);
+}
+
+.key svg { display: block; }
+
+.clock {
+    font-family: var(--num);
+    font-variant-numeric: tabular-nums;
+    font-size: 13px;
+    color: var(--signal);
+    white-space: nowrap;
+}
+
+.clock s {
+    text-decoration: none;
+    color: var(--signal-mute);
+    margin: 0 5px;
+}
+
+.clock i { font-style: normal; color: var(--signal-mute); }
+
+/* Scrub and faders share one flat, square slider. No accent-color: the
+   browser default renders a rounded pill that fights everything else. */
+.slide {
+    -webkit-appearance: none;
+    appearance: none;
+    background: transparent;
+    cursor: pointer;
+    height: 18px;
+}
+
+.slide::-webkit-slider-runnable-track {
+    height: 3px;
+    background: var(--graticule);
+}
+
+.slide::-moz-range-track { height: 3px; background: var(--graticule); }
+
+.slide::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 3px;
+    height: 13px;
+    margin-top: -5px;
+    background: var(--signal);
+    border: 0;
+    border-radius: 0;
+}
+
+.slide::-moz-range-thumb {
+    width: 3px;
+    height: 13px;
+    background: var(--signal);
+    border: 0;
+    border-radius: 0;
+}
+
+.scrub { flex: 1 1 auto; min-width: 80px; }
+
+/* --- Faders ------------------------------------------------------------- */
+
+.faders { display: flex; align-items: center; gap: 2px; }
+
+.fader {
+    display: grid;
+    grid-template-columns: 68px 68px 22px;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 10px;
+    border-left: var(--hair);
+}
+
+.fader:first-child { border-left: 0; }
+
+.fader label {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--signal-dim);
+    cursor: pointer;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.fader .slide { width: 68px; }
+
+.fader[data-muted='true'] label,
+.fader[data-muted='true'] .slide { opacity: 0.32; }
+
+.cut {
+    width: 22px;
+    height: 20px;
+    background: transparent;
+    border: var(--hair);
+    color: var(--signal-mute);
+    font-family: var(--ui);
+    font-size: 10px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.cut:hover { color: var(--signal-dim); border-color: var(--graticule-l); }
+
+.cut[aria-pressed='true'] {
+    background: var(--caution);
+    border-color: var(--caution);
+    color: var(--void);
+}
+
+/* ==========================================================================
+   Narrow
+   ========================================================================== */
+
+@media (max-width: 1080px) {
+    .bench { grid-template-columns: minmax(0, 1fr) 300px; }
+    .fader { grid-template-columns: 58px 50px 22px; }
+    .fader .slide { width: 50px; }
+}
+
+@media (max-width: 860px) {
+    .chamber { grid-template-rows: 52px minmax(0, 1fr) auto; }
+    .bench { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(240px, 1fr) auto; }
+    .stage { border-right: 0; border-bottom: var(--hair); }
+    .readout { max-height: 42vh; }
+    .transport { grid-template-columns: minmax(0, 1fr); }
+    .faders { flex-wrap: wrap; }
+    .fader { border-left: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    * { transition-duration: 1ms !important; }
 }

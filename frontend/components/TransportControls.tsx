@@ -3,7 +3,7 @@
 import React from 'react';
 import { StemName, STEM_NAMES, STEM_CONFIGS } from '../hooks/useSpatialSession';
 
-interface TransportControlsProps {
+interface Props {
     isPlaying: boolean;
     currentTime: number;
     duration: number;
@@ -17,96 +17,91 @@ interface TransportControlsProps {
     onToggleMute: (stem: StemName) => void;
 }
 
-export const TransportControls: React.FC<TransportControlsProps> = ({
-    isPlaying,
-    currentTime,
-    duration,
-    volumes,
-    mutes,
-    onPlay,
-    onPause,
-    onStop,
-    onSeek,
-    onSetVolume,
-    onToggleMute
-}) => {
-    const formatTime = (secs: number) => {
-        const m = Math.floor(secs / 60);
-        const s = Math.floor(secs % 60);
-        return `${m}:${s < 10 ? '0' : ''}${s}`;
-    };
-
-    return (
-        <div className="transport-master-container">
-            {/* Playback Buttons & Time */}
-            <div className="transport-playback-cluster">
-                <button
-                    onClick={isPlaying ? onPause : onPlay}
-                    className="transport-btn play-btn"
-                    aria-label={isPlaying ? 'Pause' : 'Play'}
-                >
-                    {isPlaying ? '⏸ PAUSE' : '▶ PLAY'}
-                </button>
-                <button
-                    onClick={onStop}
-                    className="transport-btn stop-btn"
-                    aria-label="Stop"
-                >
-                    ⏹ STOP
-                </button>
-
-                <div className="transport-time-display">
-                    <span className="current-time">{formatTime(currentTime)}</span>
-                    <span className="time-separator">/</span>
-                    <span className="duration-time">{formatTime(duration)}</span>
-                </div>
-
-                {/* Progress bar */}
-                <input
-                    type="range"
-                    min="0"
-                    max={duration || 1}
-                    step="0.1"
-                    value={currentTime}
-                    onChange={(e) => onSeek(parseFloat(e.target.value))}
-                    className="seek-bar"
-                />
-            </div>
-
-            {/* Stem Mixers (Drums, Bass, Vocals, Other) */}
-            <div className="transport-stem-mixers">
-                {STEM_NAMES.map(stem => {
-                    const c = STEM_CONFIGS[stem];
-                    const isMuted = mutes[stem];
-                    const vol = volumes[stem] ?? 1.0;
-
-                    return (
-                        <div key={stem} className="stem-mixer-strip">
-                            <span className="mixer-dot" style={{ background: c.color }} />
-                            <span className="mixer-name">{c.name.slice(0, 3).toUpperCase()}</span>
-
-                            <input
-                                type="range"
-                                min="0"
-                                max="1"
-                                step="0.01"
-                                value={isMuted ? 0 : vol}
-                                onChange={(e) => onSetVolume(stem, parseFloat(e.target.value))}
-                                className="volume-slider"
-                                style={{ accentColor: c.color }}
-                                aria-label={`${c.label} volume`}
-                            />
-
-                            <button
-                                onClick={() => onToggleMute(stem)}
-                                className={`mute-btn ${isMuted ? 'muted' : ''}`}
-                            >
-                                M
-                            </button>
-                        </div>
-                    );
-                })}
-            </div>
-        </div>
-    );
+const clock = (s: number) => {
+    const t = Math.max(0, s);
+    const m = Math.floor(t / 60);
+    const sec = Math.floor(t % 60);
+    return `${m}:${sec < 10 ? '0' : ''}${sec}`;
 };
+
+export const TransportControls: React.FC<Props> = ({
+    isPlaying, currentTime, duration, volumes, mutes,
+    onPlay, onPause, onStop, onSeek, onSetVolume, onToggleMute
+}) => (
+    <div className="transport">
+        <div className="deck">
+            <button
+                className="key"
+                data-lit={isPlaying}
+                onClick={isPlaying ? onPause : onPlay}
+                aria-label={isPlaying ? 'Pause' : 'Play'}
+            >
+                {isPlaying ? (
+                    <svg width="10" height="12" viewBox="0 0 10 12" aria-hidden="true">
+                        <rect width="3.2" height="12" fill="currentColor" />
+                        <rect x="6.8" width="3.2" height="12" fill="currentColor" />
+                    </svg>
+                ) : (
+                    <svg width="10" height="12" viewBox="0 0 10 12" aria-hidden="true">
+                        <path d="M0 0 L10 6 L0 12 Z" fill="currentColor" />
+                    </svg>
+                )}
+            </button>
+
+            <button className="key" onClick={onStop} aria-label="Stop and return to start">
+                <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+                    <rect width="10" height="10" fill="currentColor" />
+                </svg>
+            </button>
+
+            <div className="clock">
+                {clock(currentTime)}<s>/</s><i>{clock(duration)}</i>
+            </div>
+
+            <input
+                type="range"
+                className="slide scrub"
+                min={0}
+                max={duration || 1}
+                step={0.1}
+                value={Math.min(currentTime, duration || 1)}
+                onChange={e => onSeek(parseFloat(e.target.value))}
+                aria-label="Playback position"
+            />
+        </div>
+
+        <div className="faders">
+            {STEM_NAMES.map(stem => {
+                const c = STEM_CONFIGS[stem];
+                const muted = mutes[stem];
+                const vol = volumes[stem] ?? 1;
+                return (
+                    <div className="fader" key={stem} data-muted={muted}>
+                        <label htmlFor={`fader-${stem}`} style={{ color: muted ? undefined : c.color }}>
+                            {c.label}
+                        </label>
+                        <input
+                            id={`fader-${stem}`}
+                            type="range"
+                            className="slide"
+                            min={0}
+                            max={1}
+                            step={0.01}
+                            value={muted ? 0 : vol}
+                            onChange={e => onSetVolume(stem, parseFloat(e.target.value))}
+                            aria-label={`${c.label} level`}
+                        />
+                        <button
+                            className="cut"
+                            aria-pressed={muted}
+                            onClick={() => onToggleMute(stem)}
+                            aria-label={`${muted ? 'Unmute' : 'Mute'} ${c.label}`}
+                        >
+                            M
+                        </button>
+                    </div>
+                );
+            })}
+        </div>
+    </div>
+);

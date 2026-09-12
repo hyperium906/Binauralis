@@ -3,385 +3,468 @@
 import React, { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { StemName, STEM_NAMES, STEM_CONFIGS, Position3D } from '../hooks/useSpatialSession';
 import { haloVertexShader } from './shaders/haloVertex.glsl';
-import { haloFragmentShader } from './shaders/haloFragment.glsl';
+import {
+    haloFragmentShader,
+    floorVertexShader,
+    floorFragmentShader,
+    wavefrontVertexShader,
+    wavefrontFragmentShader
+} from './shaders/haloFragment.glsl';
+
+const STAGE_R = 3.0;   // stage boundary, metres
+const NEAR_R = 0.5;    // near-field clamp, metres
+const WAVE_SPEED = 2.4; // metres/second, scaled for legibility
 
 interface SpatialCanvas3DProps {
     positions: Record<StemName, Position3D>;
     activeStem: StemName;
-    rmsLevels: Record<StemName, number>;
+    levels: Record<StemName, number>;
     onSelectStem: (stem: StemName) => void;
     onUpdatePosition: (stem: StemName, x: number, y: number, z: number) => void;
+    onFirstMove?: () => void;
 }
 
-export const SpatialCanvas3D: React.FC<SpatialCanvas3DProps> = ({
+interface StemRig {
+    group: THREE.Group;
+    core: THREE.Mesh;
+    shell: THREE.Mesh;
+    shellMat: THREE.ShaderMaterial;
+    drop: THREE.Line;
+    dropPos: THREE.BufferAttribute;
+    wave: THREE.Mesh;
+    waveMat: THREE.ShaderMaterial;
+    waveProgress: number;
+    waveStrength: number;
+    waveDistance: number;
+    last: THREE.Vector3;
+}
+
+export const SpatialCanvas3D: React.FC<SpatialCanvas3DProps> = React.memo(({
     positions,
     activeStem,
-    rmsLevels,
+    levels,
     onSelectStem,
-    onUpdatePosition
+    onUpdatePosition,
+    onFirstMove
 }) => {
     const mountRef = useRef<HTMLDivElement>(null);
-    const sceneRef = useRef<THREE.Scene | null>(null);
-    const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
-    const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
-    const controlsRef = useRef<OrbitControls | null>(null);
 
-    // References to stem objects and shader materials
-    const stemNodesRef = useRef<Map<StemName, THREE.Group>>(new Map());
-    const haloMaterialsRef = useRef<Map<StemName, THREE.ShaderMaterial>>(new Map());
-    const dropLinesRef = useRef<Map<StemName, THREE.Line>>(new Map());
-
-    // Dragging interaction state
-    const draggingStemRef = useRef<StemName | null>(null);
-    const dragPlaneRef = useRef<THREE.Plane>(new THREE.Plane());
-    const raycasterRef = useRef<THREE.Raycaster>(new THREE.Raycaster());
-    const pointerRef = useRef<THREE.Vector2>(new THREE.Vector2());
-
-    // Props ref to access latest handlers inside Three.js event loop
-    const propsRef = useRef({ onSelectStem, onUpdatePosition, activeStem, rmsLevels, positions });
-    propsRef.current = { onSelectStem, onUpdatePosition, activeStem, rmsLevels, positions };
+    // Latest props, read from inside the render loop without re-running the effect.
+    const propsRef = useRef({ positions, activeStem, levels, onSelectStem, onUpdatePosition, onFirstMove });
+    propsRef.current = { positions, activeStem, levels, onSelectStem, onUpdatePosition, onFirstMove };
 
     useEffect(() => {
         const container = mountRef.current;
         if (!container) return;
 
-        // 1. Scene & Coordinates (Audio coordinate convention: +X Right, +Y Forward, +Z Up)
-        const scene = new THREE.Scene();
-        sceneRef.current = scene;
-        scene.fog = new THREE.FogExp2(0x0a0d14, 0.08);
+        const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        const disposables: { dispose(): void }[] = [];
+        const track = <T extends { dispose(): void }>(o: T): T => { disposables.push(o); return o; };
 
-        // 2. Camera: Positioned behind and slightly above listener
-        const width = container.clientWidth;
-        const height = container.clientHeight;
-        const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 100);
-        camera.up.set(0, 0, 1); // Z is Up
-        camera.position.set(0, -4.8, 3.2); // Looking from behind (-Y) and above (+Z) towards origin
-        camera.lookAt(0, 0.5, 0);
-        cameraRef.current = camera;
+        let width = container.clientWidth || 1;
+        let height = container.clientHeight || 1;
 
-        // 3. High-Fidelity WebGL Renderer
-        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
+        // ---------------------------------------------------------------
+        // Renderer. Linear workflow with ACES so that bright, saturated
+        // emitters desaturate toward white the way real ones do.
+        // ---------------------------------------------------------------
+        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: 'high-performance' });
         renderer.setSize(width, height);
         renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
         renderer.toneMapping = THREE.ACESFilmicToneMapping;
-        renderer.toneMappingExposure = 1.2;
+        renderer.toneMappingExposure = 0.95;
+        renderer.outputColorSpace = THREE.SRGBColorSpace;
+        renderer.setClearColor(0x06080b, 1);
         container.appendChild(renderer.domElement);
-        rendererRef.current = renderer;
 
-        // 4. OrbitControls
+        const scene = new THREE.Scene();
+        scene.fog = new THREE.FogExp2(0x06080b, 0.055);
+
+        // +X right, +Y forward, +Z up — the DSP's own convention.
+        const camera = new THREE.PerspectiveCamera(40, width / height, 0.1, 60);
+        camera.up.set(0, 0, 1);
+        camera.position.set(0.55, -4.85, 3.95);
+
         const controls = new OrbitControls(camera, renderer.domElement);
         controls.enableDamping = true;
-        controls.dampingFactor = 0.05;
-        controls.maxDistance = 8.0;
-        controls.minDistance = 1.5;
-        controls.maxPolarAngle = Math.PI / 2 + 0.1; // Limit below ground plane
-        controls.target.set(0, 0.5, 0);
-        controlsRef.current = controls;
+        controls.dampingFactor = 0.06;
+        controls.rotateSpeed = 0.75;
+        controls.minDistance = 1.8;
+        controls.maxDistance = 8.5;
+        controls.maxPolarAngle = Math.PI * 0.495;  // never go under the floor
+        controls.minPolarAngle = 0.12;
+        controls.target.set(0, 0.05, 0.15);
+        controls.update();
 
-        // 5. Lighting
-        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
-        scene.add(ambientLight);
+        // ---------------------------------------------------------------
+        // Post: one bloom pass, tuned low. Bloom is what turns an emissive
+        // material into light; without it the scene reads as bright plastic.
+        // ---------------------------------------------------------------
+        const composer = track(new EffectComposer(renderer));
+        composer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+        composer.setSize(width, height);
+        composer.addPass(new RenderPass(scene, camera));
 
-        const keyLight = new THREE.DirectionalLight(0x00f2fe, 1.2);
-        keyLight.position.set(3, -4, 5);
-        scene.add(keyLight);
+        const bloom = new UnrealBloomPass(new THREE.Vector2(width, height), 0.62, 0.62, 0.72);
+        composer.addPass(bloom);
+        composer.addPass(new OutputPass());
 
-        const fillLight = new THREE.DirectionalLight(0x9d4edd, 0.8);
-        fillLight.position.set(-3, 4, 3);
-        scene.add(fillLight);
+        // ---------------------------------------------------------------
+        // Lighting. Deliberately dim: almost everything visible here is an
+        // emitter, and the lights exist only to shape the listener.
+        // ---------------------------------------------------------------
+        scene.add(new THREE.AmbientLight(0x3d4a63, 1.5));
 
-        // 6. Soundstage Ground: Concentric Distance Rings (0.5m to 3.0m)
-        const gridGroup = new THREE.Group();
-        const ringDistances = [0.5, 1.0, 1.5, 2.0, 2.5, 3.0];
-        const ringMaterial = new THREE.LineBasicMaterial({ color: 0x334155, transparent: true, opacity: 0.4 });
+        const key = new THREE.DirectionalLight(0xdbeaff, 2.1);
+        key.position.set(2.4, -3.0, 4.2);
+        scene.add(key);
 
-        ringDistances.forEach(radius => {
-            const segments = 64;
-            const points: THREE.Vector3[] = [];
-            for (let i = 0; i <= segments; ++i) {
-                const theta = (i / segments) * Math.PI * 2;
-                points.push(new THREE.Vector3(Math.cos(theta) * radius, Math.sin(theta) * radius, 0));
-            }
-            const ringGeo = new THREE.BufferGeometry().setFromPoints(points);
-            const ringLine = new THREE.Line(ringGeo, ringMaterial);
-            gridGroup.add(ringLine);
-        });
+        const rim = new THREE.DirectionalLight(0x6f9bff, 1.1);
+        rim.position.set(-3.2, 2.6, 1.4);
+        scene.add(rim);
 
-        // Stage boundary wireframe sphere (3.0m radius)
-        const stageSphereGeo = new THREE.SphereGeometry(3.0, 24, 16);
-        const stageSphereMat = new THREE.MeshBasicMaterial({
-            color: 0x00f2fe,
-            wireframe: true,
+        // ---------------------------------------------------------------
+        // Floor graticule — computed in the shader so the rings stay crisp
+        // at any zoom and dissolve at the edges instead of cutting off.
+        // ---------------------------------------------------------------
+        const floorGeo = track(new THREE.PlaneGeometry(STAGE_R * 2.3, STAGE_R * 2.3));
+        const floorMat = track(new THREE.ShaderMaterial({
+            vertexShader: floorVertexShader,
+            fragmentShader: floorFragmentShader,
+            uniforms: {
+                uGrid: { value: new THREE.Color(0x46566c) },
+                uEdge: { value: new THREE.Color(0x7f97b2) },
+                uOuter: { value: STAGE_R },
+                uInner: { value: NEAR_R }
+            },
             transparent: true,
-            opacity: 0.04
-        });
-        const stageSphere = new THREE.Mesh(stageSphereGeo, stageSphereMat);
-        gridGroup.add(stageSphere);
+            depthWrite: false
+            // No THREE fog here: a raw ShaderMaterial with fog:true needs the
+            // fog uniforms and chunks merged in by hand. The grid already
+            // dissolves analytically at the stage edge, which is the effect
+            // fog would have been faking.
+        }));
+        scene.add(new THREE.Mesh(floorGeo, floorMat));
 
-        // Directional Axes (X Right: Red/Cyan, Y Forward: Blue/Green)
-        const axisGeoY = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, -3, 0), new THREE.Vector3(0, 3, 0)]);
-        const axisMatY = new THREE.LineBasicMaterial({ color: 0x00f2fe, transparent: true, opacity: 0.5 });
-        gridGroup.add(new THREE.Line(axisGeoY, axisMatY));
+        // The forward axis, drawn once. It is the 0° bearing and the only
+        // reason the listener's orientation is readable at all.
+        const axisGeo = track(new THREE.BufferGeometry().setFromPoints([
+            new THREE.Vector3(0, 0, 0.004), new THREE.Vector3(0, STAGE_R, 0.004)
+        ]));
+        const axisMat = track(new THREE.LineBasicMaterial({ color: 0x8fa6c2, transparent: true, opacity: 0.75 }));
+        scene.add(new THREE.Line(axisGeo, axisMat));
 
-        const axisGeoX = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(-3, 0, 0), new THREE.Vector3(3, 0, 0)]);
-        const axisMatX = new THREE.LineBasicMaterial({ color: 0x475569, transparent: true, opacity: 0.3 });
-        gridGroup.add(new THREE.Line(axisGeoX, axisMatX));
+        // ---------------------------------------------------------------
+        // Listener. A measurement head: matte, unlit from within, facing +Y.
+        // ---------------------------------------------------------------
+        const listener = new THREE.Group();
 
-        scene.add(gridGroup);
+        const headGeo = track(new THREE.SphereGeometry(0.135, 48, 32));
+        headGeo.scale(0.92, 1.06, 1.12);
+        const headMat = track(new THREE.MeshStandardMaterial({
+            color: 0x51627b, metalness: 0.08, roughness: 0.7,
+            emissive: 0x141b26, emissiveIntensity: 1.0
+        }));
+        listener.add(new THREE.Mesh(headGeo, headMat));
 
-        // 7. Central Listener Avatar at (0, 0, 0)
-        const listenerGroup = new THREE.Group();
+        // The two receivers. Everything in this app exists to serve these.
+        const earGeo = track(new THREE.CylinderGeometry(0.024, 0.024, 0.016, 20));
+        earGeo.rotateZ(Math.PI / 2);
+        const earMat = track(new THREE.MeshStandardMaterial({
+            color: 0x8fe6ff, emissive: 0x8fe6ff, emissiveIntensity: 0.9, roughness: 0.4
+        }));
+        const earL = new THREE.Mesh(earGeo, earMat);
+        earL.position.set(-0.131, 0, 0);
+        const earR = new THREE.Mesh(earGeo, earMat);
+        earR.position.set(0.131, 0, 0);
+        listener.add(earL, earR);
 
-        // Head Sphere
-        const headGeo = new THREE.SphereGeometry(0.18, 32, 32);
-        const headMat = new THREE.MeshStandardMaterial({
-            color: 0x1e293b,
-            metalness: 0.9,
-            roughness: 0.15,
-            emissive: 0x0f172a
-        });
-        const headMesh = new THREE.Mesh(headGeo, headMat);
-        listenerGroup.add(headMesh);
+        // Nose: a small flat wedge, not a cone. Reads as an instrument datum
+        // rather than an arrow.
+        const noseGeo = track(new THREE.ConeGeometry(0.024, 0.075, 3));
+        noseGeo.rotateX(-Math.PI / 2);
+        const noseMat = track(new THREE.MeshStandardMaterial({
+            color: 0x4a5a72, metalness: 0.3, roughness: 0.5
+        }));
+        const nose = new THREE.Mesh(noseGeo, noseMat);
+        nose.position.set(0, 0.15, -0.008);
+        listener.add(nose);
 
-        // Directional Cone (Facing +Y forward)
-        const coneGeo = new THREE.ConeGeometry(0.09, 0.28, 16);
-        coneGeo.rotateX(Math.PI / 2); // Point along +Y
-        const coneMat = new THREE.MeshStandardMaterial({
-            color: 0x00f2fe,
-            emissive: 0x00f2fe,
-            emissiveIntensity: 0.8,
-            roughness: 0.2
-        });
-        const coneMesh = new THREE.Mesh(coneGeo, coneMat);
-        coneMesh.position.set(0, 0.24, 0);
-        listenerGroup.add(coneMesh);
+        scene.add(listener);
 
-        // Binaural Ear Markers
-        const earGeo = new THREE.SphereGeometry(0.04, 16, 16);
-        const earMat = new THREE.MeshStandardMaterial({ color: 0x00f2fe, emissive: 0x00f2fe });
-        const leftEar = new THREE.Mesh(earGeo, earMat);
-        leftEar.position.set(-0.18, 0, 0); // Left (-X)
-        const rightEar = new THREE.Mesh(earGeo, earMat);
-        rightEar.position.set(0.18, 0, 0);  // Right (+X)
-        listenerGroup.add(leftEar);
-        listenerGroup.add(rightEar);
+        // ---------------------------------------------------------------
+        // Stems
+        // ---------------------------------------------------------------
+        const rigs = new Map<StemName, StemRig>();
+        const coreGeo = track(new THREE.SphereGeometry(0.058, 32, 24));
+        const shellGeo = track(new THREE.SphereGeometry(0.17, 40, 28));
+        const waveGeo = track(new THREE.PlaneGeometry(2, 2));
 
-        scene.add(listenerGroup);
-
-        // 8. Construct 4 Stem Orbital Nodes with Dynamic GLSL Pulsing Halos
         STEM_NAMES.forEach(stem => {
-            const config = STEM_CONFIGS[stem];
-            const nodeGroup = new THREE.Group();
-            nodeGroup.name = stem;
+            const cfg = STEM_CONFIGS[stem];
+            const hue = new THREE.Color(cfg.color);
 
-            // Core Stem Sphere
-            const coreGeo = new THREE.SphereGeometry(0.12, 32, 32);
-            const coreMat = new THREE.MeshStandardMaterial({
-                color: config.hexInt,
-                emissive: config.hexInt,
-                emissiveIntensity: 0.6,
-                metalness: 0.4,
-                roughness: 0.3
-            });
-            const coreMesh = new THREE.Mesh(coreGeo, coreMat);
-            coreMesh.userData = { stemName: stem };
-            nodeGroup.add(coreMesh);
+            const group = new THREE.Group();
+            group.name = stem;
 
-            // Dynamic GLSL Pulsing Halo
-            const haloGeo = new THREE.SphereGeometry(0.24, 32, 32);
-            const haloMat = new THREE.ShaderMaterial({
+            // Core driven well past 1.0 so ACES + bloom blow the centre out
+            // to white and leave the hue in the skirt. White core, coloured
+            // falloff — for free, from the tone mapper.
+            const lum = 0.2126 * hue.r + 0.7152 * hue.g + 0.0722 * hue.b;
+            const drive = 1.62 / Math.max(0.18, lum);
+            const coreMat = track(new THREE.MeshBasicMaterial({
+                color: hue.clone().multiplyScalar(drive), toneMapped: true
+            }));
+            const core = new THREE.Mesh(coreGeo, coreMat);
+            core.userData.stemName = stem;
+            group.add(core);
+
+            const shellMat = track(new THREE.ShaderMaterial({
                 vertexShader: haloVertexShader,
                 fragmentShader: haloFragmentShader,
                 uniforms: {
-                    uColor: { value: new THREE.Color(config.color) },
-                    uTime: { value: 0.0 },
-                    uRms: { value: 0.1 }
+                    uColor: { value: hue.clone() },
+                    uLevel: { value: 0.1 },
+                    uSelected: { value: 0 }
                 },
                 transparent: true,
                 blending: THREE.AdditiveBlending,
                 side: THREE.BackSide,
-                depthWrite: false
-            });
-            const haloMesh = new THREE.Mesh(haloGeo, haloMat);
-            nodeGroup.add(haloMesh);
-            haloMaterialsRef.current.set(stem, haloMat);
+                depthWrite: false,
+                fog: false
+            }));
+            const shell = new THREE.Mesh(shellGeo, shellMat);
+            group.add(shell);
 
-            // Drop line to ground plane
-            const dropLineGeo = new THREE.BufferGeometry().setFromPoints([
-                new THREE.Vector3(0, 0, 0),
-                new THREE.Vector3(0, 0, 0)
-            ]);
-            const dropLineMat = new THREE.LineBasicMaterial({
-                color: config.hexInt,
+            // Drop line to the floor, faded toward the bottom via vertex
+            // colours. Its buffer is written in place every frame — never
+            // reallocated.
+            const dropGeo = track(new THREE.BufferGeometry());
+            const dropPos = new THREE.BufferAttribute(new Float32Array(6), 3);
+            dropPos.setUsage(THREE.DynamicDrawUsage);
+            dropGeo.setAttribute('position', dropPos);
+            dropGeo.setAttribute('color', new THREE.BufferAttribute(new Float32Array([
+                hue.r, hue.g, hue.b, hue.r * 0.06, hue.g * 0.06, hue.b * 0.06
+            ]), 3));
+            const dropMat = track(new THREE.LineBasicMaterial({
+                vertexColors: true, transparent: true, opacity: 0.9
+            }));
+            const drop = new THREE.Line(dropGeo, dropMat);
+            drop.frustumCulled = false;
+            scene.add(drop);
+
+            // Wavefront, lying flat on the measurement floor.
+            const waveMat = track(new THREE.ShaderMaterial({
+                vertexShader: wavefrontVertexShader,
+                fragmentShader: wavefrontFragmentShader,
+                uniforms: {
+                    uColor: { value: hue.clone() },
+                    uProgress: { value: 1 },
+                    uRadius: { value: 1 },
+                    uStrength: { value: 0 }
+                },
                 transparent: true,
-                opacity: 0.35
+                blending: THREE.AdditiveBlending,
+                depthWrite: false,
+                side: THREE.DoubleSide,
+                fog: false
+            }));
+            const wave = new THREE.Mesh(waveGeo, waveMat);
+            wave.position.z = 0.006;
+            wave.visible = false;
+            scene.add(wave);
+
+            const p = propsRef.current.positions[stem];
+            group.position.set(p.x, p.y, p.z);
+            scene.add(group);
+
+            rigs.set(stem, {
+                group, core, shell, shellMat, drop, dropPos, wave, waveMat,
+                waveProgress: 1, waveStrength: 0, waveDistance: 1,
+                last: new THREE.Vector3(p.x, p.y, p.z)
             });
-            const dropLine = new THREE.Line(dropLineGeo, dropLineMat);
-            scene.add(dropLine);
-            dropLinesRef.current.set(stem, dropLine);
-
-            // Initial position
-            const initialPos = propsRef.current.positions[stem];
-            nodeGroup.position.set(initialPos.x, initialPos.y, initialPos.z);
-            scene.add(nodeGroup);
-            stemNodesRef.current.set(stem, nodeGroup);
         });
 
-        // 9. Pointer Raycasting & Drag Interaction
-        const onPointerDown = (event: MouseEvent) => {
-            const rect = renderer.domElement.getBoundingClientRect();
-            pointerRef.current.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-            pointerRef.current.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+        // ---------------------------------------------------------------
+        // Pointer interaction. Pointer events, so this works under touch.
+        // ---------------------------------------------------------------
+        const raycaster = new THREE.Raycaster();
+        raycaster.params.Points = { threshold: 0.1 };
+        const ndc = new THREE.Vector2();
+        const dragPlane = new THREE.Plane();
+        const hitPoint = new THREE.Vector3();
+        const planeNormal = new THREE.Vector3();
+        const pickables: THREE.Object3D[] = [];
+        rigs.forEach(r => pickables.push(r.core));
 
-            raycasterRef.current.setFromCamera(pointerRef.current, camera);
+        let dragging: StemName | null = null;
+        let announcedMove = false;
+        const el = renderer.domElement;
+        el.style.touchAction = 'none';
 
-            // Intersect stem meshes
-            const stemMeshes = Array.from(stemNodesRef.current.values()).map(g => g.children[0]);
-            const intersects = raycasterRef.current.intersectObjects(stemMeshes, false);
+        const toNdc = (e: PointerEvent) => {
+            const rect = el.getBoundingClientRect();
+            ndc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+            ndc.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+        };
 
-            if (intersects.length > 0) {
-                const hit = intersects[0];
-                const stemName = hit.object.userData.stemName as StemName;
-                if (stemName) {
-                    draggingStemRef.current = stemName;
-                    propsRef.current.onSelectStem(stemName);
+        const onDown = (e: PointerEvent) => {
+            toNdc(e);
+            raycaster.setFromCamera(ndc, camera);
+            const hit = raycaster.intersectObjects(pickables, false)[0];
+            if (!hit) return;
 
-                    // Disable camera rotation while dragging
-                    controls.enabled = false;
+            const stem = hit.object.userData.stemName as StemName;
+            if (!stem) return;
 
-                    // Create camera-facing drag plane intersecting the stem position
-                    const stemPos = stemNodesRef.current.get(stemName)!.position;
-                    const planeNormal = new THREE.Vector3();
-                    camera.getWorldDirection(planeNormal).negate();
-                    dragPlaneRef.current.setFromNormalAndCoplanarPoint(planeNormal, stemPos);
+            dragging = stem;
+            propsRef.current.onSelectStem(stem);
+            controls.enabled = false;
+            el.setPointerCapture(e.pointerId);
+            el.style.cursor = 'grabbing';
+
+            camera.getWorldDirection(planeNormal).negate();
+            dragPlane.setFromNormalAndCoplanarPoint(planeNormal, rigs.get(stem)!.group.position);
+        };
+
+        const onMove = (e: PointerEvent) => {
+            toNdc(e);
+            raycaster.setFromCamera(ndc, camera);
+
+            if (dragging) {
+                if (raycaster.ray.intersectPlane(dragPlane, hitPoint)) {
+                    if (!announcedMove) {
+                        announcedMove = true;
+                        propsRef.current.onFirstMove?.();
+                    }
+                    propsRef.current.onUpdatePosition(dragging, hitPoint.x, hitPoint.y, hitPoint.z);
                 }
+                return;
             }
+            el.style.cursor = raycaster.intersectObjects(pickables, false).length ? 'grab' : 'default';
         };
 
-        const onPointerMove = (event: MouseEvent) => {
-            const rect = renderer.domElement.getBoundingClientRect();
-            pointerRef.current.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-            pointerRef.current.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
-
-            if (draggingStemRef.current) {
-                raycasterRef.current.setFromCamera(pointerRef.current, camera);
-                const intersection = new THREE.Vector3();
-
-                if (raycasterRef.current.ray.intersectPlane(dragPlaneRef.current, intersection)) {
-                    propsRef.current.onUpdatePosition(
-                        draggingStemRef.current,
-                        intersection.x,
-                        intersection.y,
-                        intersection.z
-                    );
-                }
-            } else {
-                // Hover effect: change cursor
-                raycasterRef.current.setFromCamera(pointerRef.current, camera);
-                const stemMeshes = Array.from(stemNodesRef.current.values()).map(g => g.children[0]);
-                const intersects = raycasterRef.current.intersectObjects(stemMeshes, false);
-                renderer.domElement.style.cursor = intersects.length > 0 ? 'grab' : 'default';
-            }
+        const onUp = (e: PointerEvent) => {
+            if (!dragging) return;
+            dragging = null;
+            controls.enabled = true;
+            el.style.cursor = 'grab';
+            if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId);
         };
 
-        const onPointerUp = () => {
-            if (draggingStemRef.current) {
-                draggingStemRef.current = null;
-                controls.enabled = true;
-                renderer.domElement.style.cursor = 'default';
-            }
-        };
+        el.addEventListener('pointerdown', onDown);
+        el.addEventListener('pointermove', onMove);
+        el.addEventListener('pointerup', onUp);
+        el.addEventListener('pointercancel', onUp);
 
-        const domElem = renderer.domElement;
-        domElem.addEventListener('mousedown', onPointerDown);
-        window.addEventListener('mousemove', onPointerMove);
-        window.addEventListener('mouseup', onPointerUp);
-
-        // 10. ResizeObserver for responsive resizing
-        const resizeObserver = new ResizeObserver(() => {
-            if (!container || !rendererRef.current || !cameraRef.current) return;
-            const newW = container.clientWidth;
-            const newH = container.clientHeight;
-            cameraRef.current.aspect = newW / newH;
-            cameraRef.current.updateProjectionMatrix();
-            rendererRef.current.setSize(newW, newH);
+        // ---------------------------------------------------------------
+        // Resize
+        // ---------------------------------------------------------------
+        const ro = new ResizeObserver(() => {
+            width = container.clientWidth || 1;
+            height = container.clientHeight || 1;
+            camera.aspect = width / height;
+            camera.updateProjectionMatrix();
+            renderer.setSize(width, height);
+            composer.setSize(width, height);
+            bloom.setSize(width, height);
         });
-        resizeObserver.observe(container);
+        ro.observe(container);
 
-        // 11. Animation Loop
-        let animationFrameId: number;
+        // ---------------------------------------------------------------
+        // Loop. No allocation past this point.
+        // ---------------------------------------------------------------
         const clock = new THREE.Clock();
+        const tmp = new THREE.Vector3();
+        let raf = 0;
 
-        const animate = () => {
-            animationFrameId = requestAnimationFrame(animate);
-            const elapsedTime = clock.getElapsedTime();
+        const frame = () => {
+            raf = requestAnimationFrame(frame);
+            const dt = Math.min(clock.getDelta(), 0.05);
+            const { positions: pos, activeStem: sel, levels: lv } = propsRef.current;
 
             controls.update();
 
-            // Update positions and dynamic GLSL shader uniforms
-            STEM_NAMES.forEach(stem => {
-                const nodeGroup = stemNodesRef.current.get(stem);
-                const haloMat = haloMaterialsRef.current.get(stem);
-                const dropLine = dropLinesRef.current.get(stem);
-                const pos = propsRef.current.positions[stem];
-                const rms = propsRef.current.rmsLevels[stem] || 0.05;
+            rigs.forEach((rig, stem) => {
+                const p = pos[stem];
+                if (!p) return;
+                const level = Math.min(1, Math.max(0, lv[stem] ?? 0.05));
 
-                if (nodeGroup && pos) {
-                    nodeGroup.position.set(pos.x, pos.y, pos.z);
+                rig.group.position.set(p.x, p.y, p.z);
 
-                    // Update drop line geometry from node down to Z=0
-                    if (dropLine) {
-                        const points = [
-                            new THREE.Vector3(pos.x, pos.y, pos.z),
-                            new THREE.Vector3(pos.x, pos.y, 0)
-                        ];
-                        dropLine.geometry.setFromPoints(points);
-                    }
+                // Shell responds to signal and selection, not to a clock.
+                rig.shellMat.uniforms.uLevel.value = level;
+                rig.shellMat.uniforms.uSelected.value = stem === sel ? 1 : 0;
 
-                    // Highlight active stem with subtle scale pulse
-                    const isActive = propsRef.current.activeStem === stem;
-                    const scaleFactor = (isActive ? 1.15 : 1.0) * (1.0 + rms * 0.4);
-                    nodeGroup.scale.set(scaleFactor, scaleFactor, scaleFactor);
+                const s = 1 + level * 0.22 + (stem === sel ? 0.1 : 0);
+                rig.shell.scale.setScalar(s);
+                rig.core.scale.setScalar(1 + level * 0.3);
+
+                // Drop line, written in place.
+                const a = rig.dropPos.array as Float32Array;
+                a[0] = p.x; a[1] = p.y; a[2] = p.z;
+                a[3] = p.x; a[4] = p.y; a[5] = 0;
+                rig.dropPos.needsUpdate = true;
+
+                if (reduceMotion) return;
+
+                // A move launches a wavefront. Travel time is proportional to
+                // distance, so the ring lands on the listener when the sound
+                // would — the delay the convolver is actually applying.
+                tmp.set(p.x, p.y, p.z);
+                if (tmp.distanceTo(rig.last) > 0.012 && rig.waveProgress > 0.22) {
+                    rig.waveProgress = 0;
+                    rig.waveStrength = 1;
+                    rig.waveDistance = Math.max(0.45, Math.hypot(p.x, p.y));
                 }
+                rig.last.copy(tmp);
 
-                // Update GLSL shader uniforms
-                if (haloMat) {
-                    haloMat.uniforms.uTime.value = elapsedTime;
-                    haloMat.uniforms.uRms.value = rms;
+                if (rig.waveStrength > 0.001) {
+                    rig.waveProgress += (WAVE_SPEED / rig.waveDistance) * dt;
+                    if (rig.waveProgress >= 1) {
+                        rig.waveProgress = 1;
+                        rig.waveStrength = 0;
+                        rig.wave.visible = false;
+                    } else {
+                        rig.wave.visible = true;
+                        rig.wave.position.set(p.x, p.y, 0.006);
+                        rig.wave.scale.setScalar(rig.waveDistance);
+                        rig.waveMat.uniforms.uProgress.value = rig.waveProgress;
+                        rig.waveMat.uniforms.uRadius.value = 1;
+                        rig.waveMat.uniforms.uStrength.value = rig.waveStrength * (0.5 + level * 0.9);
+                    }
                 }
             });
 
-            renderer.render(scene, camera);
+            composer.render();
         };
+        frame();
 
-        animate();
-
-        // Cleanup
+        // ---------------------------------------------------------------
+        // Teardown. Every geometry, material and target created above.
+        // ---------------------------------------------------------------
         return () => {
-            cancelAnimationFrame(animationFrameId);
-            resizeObserver.disconnect();
-            domElem.removeEventListener('mousedown', onPointerDown);
-            window.removeEventListener('mousemove', onPointerMove);
-            window.removeEventListener('mouseup', onPointerUp);
+            cancelAnimationFrame(raf);
+            ro.disconnect();
+            el.removeEventListener('pointerdown', onDown);
+            el.removeEventListener('pointermove', onMove);
+            el.removeEventListener('pointerup', onUp);
+            el.removeEventListener('pointercancel', onUp);
+            controls.dispose();
+            bloom.dispose();
+            disposables.forEach(d => d.dispose());
             renderer.dispose();
-            if (domElem.parentElement) {
-                domElem.parentElement.removeChild(domElem);
-            }
+            if (el.parentElement) el.parentElement.removeChild(el);
         };
     }, []);
 
-    return (
-        <div 
-            ref={mountRef} 
-            style={{ 
-                width: '100%', 
-                height: '100%', 
-                position: 'relative', 
-                overflow: 'hidden',
-                borderRadius: '24px'
-            }} 
-        />
-    );
-};
+    return <div ref={mountRef} style={{ position: 'absolute', inset: 0 }} />;
+});
+
+SpatialCanvas3D.displayName = 'SpatialCanvas3D';
