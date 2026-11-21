@@ -112,6 +112,8 @@ body { user-select: none; }
     gap: 8px;
     font-size: 12px;
     color: var(--signal-dim);
+    padding-left: 14px;
+    border-left: var(--hair);
 }
 
 .rate b {
@@ -119,18 +121,92 @@ body { user-select: none; }
     color: var(--signal);
 }
 
+.mast-tools {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    min-width: 0;
+}
+
+.mast-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    height: 30px;
+    padding: 0 12px;
+    margin-right: 8px;
+    background: var(--wedge);
+    border: var(--hair);
+    color: var(--signal-dim);
+    font-family: var(--ui);
+    font-size: 12px;
+    cursor: pointer;
+    white-space: nowrap;
+    max-width: 240px;
+    transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.mast-btn:hover {
+    background: var(--wedge-rise);
+    border-color: var(--graticule-l);
+    color: var(--signal);
+}
+
+.mast-btn[data-active='true'] {
+    border-color: var(--graticule-l);
+    color: var(--signal);
+}
+
+.mast-val {
+    font-weight: 500;
+    color: var(--signal);
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
 /* A lamp, not a badge. Lit means the engine is running. */
-.lamp {
+.lamp,
+.lamp-inline {
     width: 6px;
     height: 6px;
     border-radius: 50%;
+    flex: none;
     background: var(--stem-vocals);
     box-shadow: 0 0 0 3px rgba(143, 230, 255, 0.12);
 }
 
-.lamp[data-state='idle'] {
+.lamp-inline {
+    display: inline-block;
+    margin-right: 6px;
+    vertical-align: middle;
+}
+
+.lamp[data-state='idle'],
+.lamp-inline[data-state='idle'] {
     background: var(--signal-mute);
     box-shadow: none;
+}
+
+.link-btn {
+    background: transparent;
+    border: 0;
+    color: var(--signal-dim);
+    font-family: var(--ui);
+    font-size: 11px;
+    cursor: pointer;
+    padding: 0;
+    transition: color 120ms ease;
+}
+
+.link-btn:hover { color: var(--signal); }
+
+.sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
 }
 
 /* --- Working area ------------------------------------------------------- */
@@ -624,6 +700,360 @@ body { user-select: none; }
 }
 
 /* ==========================================================================
+   Native Modal Dialogs (flat matte chamber instrumentation)
+   ========================================================================== */
+
+dialog.modal {
+    margin: auto;
+    width: min(560px, calc(100vw - 32px));
+    max-height: min(84vh, 740px);
+    padding: 0;
+    background: var(--void);
+    color: var(--signal);
+    border: 1px solid var(--graticule-l);
+    border-radius: 0;
+    overflow: hidden;
+    user-select: text;
+}
+
+dialog.modal[open] {
+    display: flex;
+    flex-direction: column;
+}
+
+dialog.modal:modal {
+    overscroll-behavior: contain;
+}
+
+dialog.modal::backdrop {
+    background: rgba(6, 8, 11, 0.80);
+    overflow: hidden;
+    overscroll-behavior: contain;
+}
+
+.modal-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 16px var(--gut);
+    border-bottom: var(--hair);
+    background: var(--wedge);
+}
+
+.modal-head h2 {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--signal);
+}
+
+.modal-sub {
+    margin-top: 3px;
+    font-size: 11px;
+    color: var(--signal-dim);
+}
+
+.modal-sub strong {
+    font-weight: 500;
+    color: var(--signal);
+}
+
+.modal-close {
+    height: 28px;
+    padding: 0 12px;
+    background: var(--void);
+    border: var(--hair);
+    color: var(--signal-dim);
+    font-family: var(--ui);
+    font-size: 11px;
+    cursor: pointer;
+    transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.modal-close:hover {
+    background: var(--wedge-rise);
+    border-color: var(--graticule-l);
+    color: var(--signal);
+}
+
+.modal-body {
+    overflow-y: auto;
+    overscroll-behavior: contain;
+}
+
+.modal-sect {
+    padding: 16px var(--gut) 18px;
+    border-bottom: var(--hair);
+}
+
+.modal-sect:last-child { border-bottom: 0; }
+
+.modal-sect h3 {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--signal);
+}
+
+.dropzone {
+    padding: 16px;
+    background: var(--wedge);
+    border: 1px dashed var(--graticule-l);
+    transition: background 120ms ease, border-color 120ms ease;
+}
+
+.dropzone[data-over='true'] {
+    background: var(--wedge-rise);
+    border-color: var(--stem-vocals);
+}
+
+.drop-copy {
+    font-size: 12px;
+    color: var(--signal-dim);
+    margin-bottom: 14px;
+}
+
+.btn-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 32px;
+    padding: 0 14px;
+    background: var(--void);
+    border: var(--hair);
+    color: var(--signal-dim);
+    font-family: var(--ui);
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.btn:hover:not(:disabled) {
+    background: var(--wedge-rise);
+    border-color: var(--graticule-l);
+    color: var(--signal);
+}
+
+.btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.btn-primary {
+    background: var(--signal);
+    border-color: var(--signal);
+    color: var(--void);
+}
+
+.btn-primary:hover:not(:disabled) {
+    background: var(--stem-vocals);
+    border-color: var(--stem-vocals);
+    color: var(--void);
+}
+
+/* Native <progress> bar with custom styling & cqi indeterminate animation */
+.progress-block {
+    margin-top: 14px;
+}
+
+.progress-meta {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 6px;
+    font-size: 11px;
+    color: var(--signal-dim);
+}
+
+progress.prog {
+    display: block;
+    width: 100%;
+    height: 6px;
+    appearance: none;
+    border: 0 solid;
+    border-radius: 0;
+    overflow: clip;
+    background: var(--wedge-rise);
+    container-type: inline-size;
+    --progress-bar-fill: var(--stem-other);
+    --progress-bar-indeterminate-size: 32%;
+    --progress-bar-indeterminate-animation-duration: 1.4s;
+}
+
+progress.prog:dir(rtl) {
+    --progress-bar-indeterminate-animation: progress-bar-indeterminate var(--progress-bar-indeterminate-animation-duration) infinite linear reverse;
+}
+
+progress.prog:indeterminate {
+    --progress-bar-animation: var(
+        --progress-bar-indeterminate-animation,
+        progress-bar-indeterminate var(--progress-bar-indeterminate-animation-duration) infinite linear
+    );
+}
+
+progress.prog::-webkit-progress-bar {
+    background: transparent;
+}
+
+progress.prog::-webkit-progress-value {
+    background: var(--progress-bar-fill);
+    transition: inline-size 180ms linear;
+    animation: var(--progress-bar-animation, revert-rule);
+}
+
+progress.prog::-moz-progress-bar {
+    background: var(--progress-bar-fill);
+    transition: inline-size 180ms linear;
+    animation: var(--progress-bar-animation, revert-rule);
+}
+
+@keyframes progress-bar-indeterminate {
+    from, to {
+        inline-size: var(--progress-bar-indeterminate-size);
+        margin-right: auto;
+    }
+    from { translate: -100%; }
+    to { translate: 100cqi; }
+}
+
+.status-line {
+    margin-top: 10px;
+    min-height: 16px;
+    font-size: 11px;
+    color: var(--signal-dim);
+}
+
+.status-line[data-error='true'] {
+    color: var(--caution);
+}
+
+.status-line code,
+.empty-note code {
+    font-family: var(--num);
+    font-size: 11px;
+    color: var(--signal);
+    background: var(--wedge);
+    padding: 1px 5px;
+    border: var(--hair);
+}
+
+.empty-note {
+    font-size: 12px;
+    color: var(--signal-dim);
+    line-height: 1.5;
+}
+
+.session-list {
+    list-style: none;
+    border: var(--hair);
+    max-height: 180px;
+    overflow-y: auto;
+}
+
+.session-list li + li {
+    border-top: var(--hair);
+}
+
+.session-list button {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    width: 100%;
+    padding: 9px 12px;
+    background: transparent;
+    border: 0;
+    color: var(--signal-dim);
+    font-family: var(--ui);
+    font-size: 12px;
+    text-align: left;
+    cursor: pointer;
+    transition: background 120ms ease, color 120ms ease;
+}
+
+.session-list button:hover:not(:disabled) {
+    background: var(--wedge);
+    color: var(--signal);
+}
+
+.session-list li[data-active='true'] button {
+    background: var(--wedge-rise);
+    color: var(--signal);
+}
+
+.sess-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.sess-meta {
+    flex: none;
+    font-size: 11px;
+    color: var(--signal-mute);
+}
+
+/* --- Sync dialog form & peers ------------------------------------------- */
+
+.field-grid {
+    display: grid;
+    grid-template-columns: 1fr 1.4fr;
+    gap: 12px;
+    margin-bottom: 14px;
+}
+
+.field label {
+    display: block;
+    font-size: 10px;
+    color: var(--signal-mute);
+    margin-bottom: 5px;
+}
+
+.field input {
+    width: 100%;
+    height: 32px;
+    padding: 0 10px;
+    background: var(--wedge);
+    border: var(--hair);
+    border-radius: 0;
+    color: var(--signal);
+    font-family: var(--num);
+    font-size: 12px;
+}
+
+.field input:focus {
+    outline: none;
+    border-color: var(--stem-vocals);
+}
+
+.field input:disabled {
+    opacity: 0.6;
+}
+
+.peer-list {
+    list-style: none;
+    margin-top: 12px;
+    border: var(--hair);
+}
+
+.peer-list li {
+    padding: 7px 10px;
+    font-size: 11px;
+    color: var(--signal-dim);
+}
+
+.peer-list li + li {
+    border-top: var(--hair);
+}
+
+/* ==========================================================================
    Narrow
    ========================================================================== */
 
@@ -631,6 +1061,7 @@ body { user-select: none; }
     .bench { grid-template-columns: minmax(0, 1fr) 300px; }
     .fader { grid-template-columns: 58px 50px 22px; }
     .fader .slide { width: 50px; }
+    .mast-btn { max-width: 170px; }
 }
 
 @media (max-width: 860px) {
@@ -641,8 +1072,12 @@ body { user-select: none; }
     .transport { grid-template-columns: minmax(0, 1fr); }
     .faders { flex-wrap: wrap; }
     .fader { border-left: 0; }
+    .ident span { display: none; }
+    .rate { display: none; }
+    .field-grid { grid-template-columns: 1fr; }
 }
 
 @media (prefers-reduced-motion: reduce) {
     * { transition-duration: 1ms !important; }
+    progress.prog { --progress-bar-indeterminate-animation-duration: 10s; }
 }

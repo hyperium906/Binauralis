@@ -224,5 +224,61 @@ const updatedPos = engine.getStemPosition('drums');
 assert.deepStrictEqual(updatedPos, { x: 1.8, y: 2.2, z: 0.4 });
 console.log('PASSED (SpatialAudioEngine coordinates verified across 4 stems)');
 
+// -----------------------------------------------------------------------------
+// Test 7: Built-in Zero-Allocation Worklet JS DSP Fallback (ITD/ILD & Tail Reset)
+// -----------------------------------------------------------------------------
+console.log('[Test 7] Zero-Allocation Worklet JS DSP Fallback & Binaural ITD/ILD... ');
+const jsProcessor = new ProcessorClass();
+await jsProcessor.handleMessage({
+    data: {
+        type: 'INIT_JS_DSP',
+        sampleRate: 48000
+    }
+});
+assert.strictEqual(jsProcessor.isReady, true);
+assert.strictEqual(jsProcessor.mode, 'worklet-dsp');
+
+// Position source 0 (drums) hard right (+X = 1.0, Y = 0, Z = 0)
+jsProcessor.port.onmessage({
+    data: {
+        type: 'SET_POSITION',
+        sourceId: 0,
+        stemName: 'drums',
+        x: 1.0,
+        y: 0.0,
+        z: 0.0
+    }
+});
+
+const impulse = new Float32Array(128);
+impulse[0] = 1.0;
+const jsOutL = new Float32Array(128);
+const jsOutR = new Float32Array(128);
+jsProcessor.process([[impulse]], [[jsOutL, jsOutR]], {});
+
+let energyL = 0;
+let energyR = 0;
+let peakIdxL = 0;
+let peakIdxR = 0;
+let peakValL = 0;
+let peakValR = 0;
+for (let i = 0; i < 128; ++i) {
+    energyL += jsOutL[i] * jsOutL[i];
+    energyR += jsOutR[i] * jsOutR[i];
+    if (Math.abs(jsOutL[i]) > peakValL) { peakValL = Math.abs(jsOutL[i]); peakIdxL = i; }
+    if (Math.abs(jsOutR[i]) > peakValR) { peakValR = Math.abs(jsOutR[i]); peakIdxR = i; }
+}
+assert(energyR > energyL * 1.5, `Expected right-ear ILD dominance for +X source (R=${energyR}, L=${energyL})`);
+assert(peakIdxL > peakIdxR + 10, `Expected left-ear ITD delay for +X source (peakL=${peakIdxL}, peakR=${peakIdxR})`);
+
+// Verify RESET_SOURCE clears overlap-add tails cleanly
+jsProcessor.port.onmessage({ data: { type: 'RESET_SOURCE', sourceId: 0 } });
+const silence = new Float32Array(128);
+jsProcessor.process([[silence]], [[jsOutL, jsOutR]], {});
+let residual = 0;
+for (let i = 0; i < 128; ++i) residual = Math.max(residual, Math.abs(jsOutL[i]), Math.abs(jsOutR[i]));
+assert(residual < 1e-9, `Expected silent output after RESET_SOURCE, got peak ${residual}`);
+console.log(`PASSED (Right ILD ratio: ${(energyR / energyL).toFixed(2)}x, ITD: ${peakIdxL - peakIdxR} samples, tail reset exact)`);
+
 WebAssembly.instantiate = origInstantiate;
 console.log('\nAll Web Audio engine tests PASSED successfully!\n');

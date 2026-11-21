@@ -4,6 +4,8 @@
 
 export type StemName = 'drums' | 'bass' | 'vocals' | 'other';
 
+export type DspBackend = 'wasm' | 'worklet-dsp';
+
 export const STEM_NAMES: readonly StemName[] = ['drums', 'bass', 'vocals', 'other'] as const;
 
 export const STEM_INDEX_MAP: Record<StemName, number> = {
@@ -26,6 +28,8 @@ export interface MasterLoudnessMetrics {
     isClipping: boolean;
 }
 
+export type StemLevels = Record<StemName, number>;
+
 export interface HRIRTableData {
     leftHrir: Float32Array;
     rightHrir: Float32Array;
@@ -41,6 +45,11 @@ export type WorkletInboundMessage =
           sampleRate: number;
       }
     | {
+          type: 'INIT_JS_DSP';
+          hrirData?: HRIRTableData;
+          sampleRate: number;
+      }
+    | {
           type: 'SET_POSITION';
           sourceId: number;
           stemName: StemName;
@@ -51,8 +60,11 @@ export type WorkletInboundMessage =
     | {
           type: 'RESET_SOURCE';
           sourceId: number;
+      }
+    | {
+          type: 'RESET_ALL';
       };
 
 export type WorkletOutboundMessage =
-    | { type: 'ENGINE_INITIALIZED'; sampleRate: number; blockSize: number }
+    | { type: 'ENGINE_INITIALIZED'; sampleRate: number; blockSize: number; backend: DspBackend }
     | { type: 'ENGINE_ERROR'; error: string };

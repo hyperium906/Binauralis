@@ -5,6 +5,8 @@ import {
     StemName, STEM_NAMES, STEM_CONFIGS,
     Position3D, SphericalCoordinates, MasterLoudnessTelemetry
 } from '../hooks/useSpatialSession';
+import type { TrackLoudnessReport } from '../lib/api';
+import type { DspBackend } from '../../web/types';
 
 interface Props {
     activeStem: StemName;
@@ -12,8 +14,11 @@ interface Props {
     spherical: SphericalCoordinates;
     bearing: string;
     loudness: MasterLoudnessTelemetry;
+    trackLoudness?: TrackLoudnessReport | null;
+    dspBackend?: DspBackend | 'none';
     levels: Record<StemName, number>;
     onSelectStem: (stem: StemName) => void;
+    onResetPositions?: () => void;
 }
 
 const signed = (n: number, dp = 2) => `${n >= 0 ? '+' : '−'}${Math.abs(n).toFixed(dp)}`;
@@ -56,7 +61,7 @@ const BearingDial: React.FC<{ azimuth: number; elevation: number; color: string 
 };
 
 export const SpatialTelemetryHUD: React.FC<Props> = ({
-    activeStem, position, spherical, bearing, loudness, levels, onSelectStem
+    activeStem, position, spherical, bearing, loudness, trackLoudness, dspBackend, levels, onSelectStem, onResetPositions
 }) => {
     const cfg = STEM_CONFIGS[activeStem];
 
@@ -65,6 +70,7 @@ export const SpatialTelemetryHUD: React.FC<Props> = ({
     const pct = (v: number) => ((Math.max(LO, Math.min(HI, v)) - LO) / (HI - LO)) * 100;
 
     const over = loudness.peakDbfs > -1.0;
+    const filterUnit = dspBackend === 'wasm' ? 'wasm' : dspBackend === 'worklet-dsp' ? 'dsp' : 'tap';
 
     return (
         <aside className="readout" aria-label="Spatial telemetry">
@@ -106,7 +112,13 @@ export const SpatialTelemetryHUD: React.FC<Props> = ({
             <section>
                 <div className="sect-head">
                     <h2>Position</h2>
-                    <span className="spec">Listener at origin</span>
+                    {onResetPositions ? (
+                        <button type="button" className="link-btn" onClick={onResetPositions}>
+                            Reset stage
+                        </button>
+                    ) : (
+                        <span className="spec">Listener at origin</span>
+                    )}
                 </div>
 
                 <dl className="axes">
@@ -135,7 +147,7 @@ export const SpatialTelemetryHUD: React.FC<Props> = ({
                     </div>
                     <div className="axis">
                         <dt>Filter</dt>
-                        <dd className="num">512<u>tap</u></dd>
+                        <dd className="num">512<u>{filterUnit}</u></dd>
                     </div>
                 </dl>
             </section>
@@ -178,7 +190,14 @@ export const SpatialTelemetryHUD: React.FC<Props> = ({
                         <span style={{ left: '100%', transform: 'translateX(-100%)' }}>0 dBFS</span>
                     </div>
                     <p className="meter-key">
-                        −23 broadcast (EBU R128) &nbsp;·&nbsp; −14 streaming
+                        {trackLoudness ? (
+                            <>
+                                Track <span className="num">{trackLoudness.integrated_loudness_lufs.toFixed(1)}</span> LUFS
+                                &nbsp;·&nbsp; LRA <span className="num">{trackLoudness.loudness_range_lu.toFixed(1)}</span> LU
+                            </>
+                        ) : (
+                            <>−23 broadcast (EBU R128) &nbsp;·&nbsp; −14 streaming</>
+                        )}
                     </p>
                 </div>
             </section>

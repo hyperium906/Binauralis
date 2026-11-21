@@ -5,8 +5,10 @@ import {
     PongPacket,
     SyncTransportPacket,
     NodeMovePacket,
+    SyncTrackPacket,
     JoinRoomPacket,
     RoomStatePacket,
+    RoomTrackInfo,
     PeerJoinedPacket,
     PeerLeftPacket,
     StemName,
@@ -25,6 +27,7 @@ interface RoomState {
     isPlaying: boolean;
     audioOffsetSec: number;
     lastTransportChangeServerTime: number;
+    track?: RoomTrackInfo;
     clients: Set<WebSocket>;
 }
 
@@ -113,6 +116,11 @@ export class AuraStreamSyncServer {
                 break;
             }
 
+            case 'SYNC_TRACK': {
+                this.handleSyncTrack(client, packet);
+                break;
+            }
+
             default:
                 break;
         }
@@ -122,20 +130,21 @@ export class AuraStreamSyncServer {
         const { roomId, clientId } = packet;
         client.roomId = roomId;
         client.clientId = clientId || client.clientId;
+        const nowServerTime = Date.now();
 
         let room = this.rooms.get(roomId);
         if (!room) {
             room = {
                 roomId,
                 positions: {
-                    vocals: { x: 0.0, y: 1.8, z: 0.2 },
-                    drums:  { x: -1.2, y: 1.2, z: 0.0 },
-                    bass:   { x: 0.0, y: 0.8, z: -0.4 },
-                    other:  { x: 1.2, y: 1.4, z: 0.1 }
+                    bass:   { x: -0.55, y: 1.30, z: -0.60 },
+                    drums:  { x: -1.70, y: 0.95, z: 0.05 },
+                    other:  { x: 1.70, y: 1.05, z: 0.20 },
+                    vocals: { x: 0.20, y: 2.05, z: 0.42 }
                 },
                 isPlaying: false,
                 audioOffsetSec: 0,
-                lastTransportChangeServerTime: Date.now(),
+                lastTransportChangeServerTime: nowServerTime,
                 clients: new Set()
             };
             this.rooms.set(roomId, room);
@@ -143,14 +152,21 @@ export class AuraStreamSyncServer {
 
         room.clients.add(ws);
 
+        // Estimate current track offset for late joiners when transport is playing
+        const liveOffsetSec = room.isPlaying
+            ? room.audioOffsetSec + Math.max(0, (nowServerTime - room.lastTransportChangeServerTime) / 1000)
+            : room.audioOffsetSec;
+
         // Send current session state to new joiner
         const statePacket: RoomStatePacket = {
             type: 'ROOM_STATE',
             roomId,
             positions: room.positions,
             isPlaying: room.isPlaying,
-            audioOffsetSec: room.audioOffsetSec,
-            peers: Array.from(room.clients).map(c => this.clients.get(c)?.clientId || 'unknown')
+            audioOffsetSec: liveOffsetSec,
+            peers: Array.from(room.clients).map(c => this.clients.get(c)?.clientId || 'unknown'),
+            serverTime: nowServerTime,
+            track: room.track
         };
         ws.send(JSON.stringify(statePacket));
 
@@ -198,6 +214,18 @@ export class AuraStreamSyncServer {
         }
 
         // Broadcast to all other peers with sender echo suppression
+        this.broadcastToRoom(room.roomId, packet, client.ws);
+    }
+
+    private handleSyncTrack(client: ClientMetadata, packet: SyncTrackPacket): void {
+        const room = client.roomId ? this.rooms.get(client.roomId) : null;
+        if (!room) return;
+
+        room.track = packet.track;
+        room.isPlaying = false;
+        room.audioOffsetSec = 0;
+        room.lastTransportChangeServerTime = Date.now();
+
         this.broadcastToRoom(room.roomId, packet, client.ws);
     }
 

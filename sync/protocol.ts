@@ -50,6 +50,22 @@ export interface NodeMovePacket {
     roomId: string;
 }
 
+export interface RoomTrackInfo {
+    jobId: string | null;
+    title: string;
+    mode: 'reference' | 'service';
+    stemUrls?: Record<StemName, string>;
+    apiBaseUrl?: string;
+    duration?: number;
+}
+
+export interface SyncTrackPacket {
+    type: 'SYNC_TRACK';
+    track: RoomTrackInfo;
+    senderId: string;
+    roomId: string;
+}
+
 // -----------------------------------------------------------------------------
 // Room Session Lifecycle Packets
 // -----------------------------------------------------------------------------
@@ -66,6 +82,8 @@ export interface RoomStatePacket {
     isPlaying: boolean;
     audioOffsetSec: number;
     peers: string[];
+    serverTime?: number;
+    track?: RoomTrackInfo;
 }
 
 export interface PeerJoinedPacket {
@@ -85,6 +103,7 @@ export type SyncPacket =
     | PongPacket
     | SyncTransportPacket
     | NodeMovePacket
+    | SyncTrackPacket
     | JoinRoomPacket
     | RoomStatePacket
     | PeerJoinedPacket

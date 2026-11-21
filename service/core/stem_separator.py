@@ -33,6 +33,7 @@ class StemSeparator:
         self.model_name = model_name
         self.device = self._detect_best_device()
         self.model = None
+        self.last_engine_used: str = "filterbank"
         logger.info(f"Initialized StemSeparator with target device: {self.device}")
 
     @staticmethod
@@ -95,8 +96,10 @@ class StemSeparator:
         stem_dict: Dict[str, torch.Tensor] = {}
 
         if self.model is not None and HAS_DEMUCS:
+            self.last_engine_used = f"demucs ({self.model_name})"
             stem_dict = self._separate_with_demucs(waveform, src_sr, progress_callback)
         else:
+            self.last_engine_used = "filterbank"
             stem_dict = self._separate_with_filterbank(waveform, src_sr, progress_callback)
 
         if progress_callback:
@@ -106,16 +109,21 @@ class StemSeparator:
         target_sr = config.TARGET_SAMPLE_RATE
         resampled_stems: Dict[str, torch.Tensor] = {}
         target_sample_count = int(round(num_samples * (target_sr / src_sr)))
+        orig_freq = src_sr if (self.model is None) else self.model.samplerate
 
-        # Sinc resampler for pristine audio fidelity
-        resampler = torchaudio.transforms.Resample(
-            orig_freq=src_sr if (self.model is None) else self.model.samplerate,
-            new_freq=target_sr,
-            resampling_method="sinc_interp_kaiser"
+        # Sinc resampler for pristine audio fidelity (skipped when already at target_sr)
+        resampler = (
+            None
+            if orig_freq == target_sr
+            else torchaudio.transforms.Resample(
+                orig_freq=orig_freq,
+                new_freq=target_sr,
+                resampling_method="sinc_interp_kaiser",
+            )
         )
 
         for name, tensor in stem_dict.items():
-            resampled = resampler(tensor.cpu())
+            resampled = tensor.cpu() if resampler is None else resampler(tensor.cpu())
             # Enforce identical sample length across all 4 stems
             curr_len = resampled.shape[-1]
             if curr_len > target_sample_count:

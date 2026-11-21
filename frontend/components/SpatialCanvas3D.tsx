@@ -28,6 +28,7 @@ interface SpatialCanvas3DProps {
     onSelectStem: (stem: StemName) => void;
     onUpdatePosition: (stem: StemName, x: number, y: number, z: number) => void;
     onFirstMove?: () => void;
+    onDragChange?: (stem: StemName | null) => void;
 }
 
 interface StemRig {
@@ -51,13 +52,14 @@ export const SpatialCanvas3D: React.FC<SpatialCanvas3DProps> = React.memo(({
     levels,
     onSelectStem,
     onUpdatePosition,
-    onFirstMove
+    onFirstMove,
+    onDragChange
 }) => {
     const mountRef = useRef<HTMLDivElement>(null);
 
     // Latest props, read from inside the render loop without re-running the effect.
-    const propsRef = useRef({ positions, activeStem, levels, onSelectStem, onUpdatePosition, onFirstMove });
-    propsRef.current = { positions, activeStem, levels, onSelectStem, onUpdatePosition, onFirstMove };
+    const propsRef = useRef({ positions, activeStem, levels, onSelectStem, onUpdatePosition, onFirstMove, onDragChange });
+    propsRef.current = { positions, activeStem, levels, onSelectStem, onUpdatePosition, onFirstMove, onDragChange };
 
     useEffect(() => {
         const container = mountRef.current;
@@ -325,6 +327,7 @@ export const SpatialCanvas3D: React.FC<SpatialCanvas3DProps> = React.memo(({
 
             dragging = stem;
             propsRef.current.onSelectStem(stem);
+            propsRef.current.onDragChange?.(stem);
             controls.enabled = false;
             el.setPointerCapture(e.pointerId);
             el.style.cursor = 'grabbing';
@@ -353,6 +356,7 @@ export const SpatialCanvas3D: React.FC<SpatialCanvas3DProps> = React.memo(({
         const onUp = (e: PointerEvent) => {
             if (!dragging) return;
             dragging = null;
+            propsRef.current.onDragChange?.(null);
             controls.enabled = true;
             el.style.cursor = 'grab';
             if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId);

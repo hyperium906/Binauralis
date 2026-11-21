@@ -18,11 +18,13 @@ export class ClockSync {
     private samples: ClockSample[] = [];
     private seq: number = 0;
     private isSync: boolean = false;
+    private hasInitialOffset: boolean = false;
 
     private readonly windowSize: number;
     private readonly minSamples: number;
     private sendPingFn?: (packet: PingPacket) => void;
     private pingTimer: any = null;
+    private burstTimers: any[] = [];
 
     constructor(options: ClockSyncOptions = {}) {
         this.windowSize = options.sampleWindowSize || 16;
@@ -33,11 +35,13 @@ export class ClockSync {
      * @brief Start automated NTP ping loop using a sender callback.
      */
     public start(sendPing: (packet: PingPacket) => void, intervalMs: number = 3000): void {
+        this.stop();
         this.sendPingFn = sendPing;
 
         // Perform initial rapid burst of 5 pings for immediate sub-second convergence
         for (let i = 0; i < 5; ++i) {
-            setTimeout(() => this.sendPing(), i * 120);
+            const handle = setTimeout(() => this.sendPing(), i * 120);
+            this.burstTimers.push(handle);
         }
 
         // Periodic maintenance heartbeat
@@ -47,6 +51,10 @@ export class ClockSync {
     }
 
     public stop(): void {
+        for (const handle of this.burstTimers) {
+            clearTimeout(handle);
+        }
+        this.burstTimers = [];
         if (this.pingTimer) {
             clearInterval(this.pingTimer);
             this.pingTimer = null;
@@ -125,10 +133,19 @@ export class ClockSync {
 
         const newOffset = weightedOffsetSum / totalWeight;
 
-        if (!this.isSync && this.samples.length >= this.minSamples) {
+        if (!this.hasInitialOffset) {
+            // Prime offset on the very first PONG so early packets never see offset=0
             this.offset = newOffset;
-            this.isSync = true;
-        } else if (this.isSync) {
+            this.hasInitialOffset = true;
+            if (this.samples.length >= this.minSamples) {
+                this.isSync = true;
+            }
+        } else if (!this.isSync) {
+            this.offset = newOffset;
+            if (this.samples.length >= this.minSamples) {
+                this.isSync = true;
+            }
+        } else {
             // Exponential moving average filter for smooth jitter-free adjustment
             const alpha = 0.25;
             this.offset = alpha * newOffset + (1.0 - alpha) * this.offset;
@@ -166,6 +183,14 @@ export class ClockSync {
 
     public isSynchronized(): boolean {
         return this.isSync;
+    }
+
+    public hasOffset(): boolean {
+        return this.hasInitialOffset;
+    }
+
+    public getSampleCount(): number {
+        return this.samples.length;
     }
 
     /**

@@ -1,4 +1,5 @@
 import io
+import shutil
 import time
 import numpy as np
 import soundfile as sf
@@ -90,26 +91,61 @@ def test_stem_extraction_lifecycle():
     assert final_status["status"] == "completed", f"Job failed with error: {final_status.get('error_message')}"
     assert final_status["progress"] == 100
 
-    # 2. Verify all 4 stems
+    # 2. Verify all 4 stems, HTTP stem_urls, and track loudness telemetry
     stems = final_status["stems"]
     assert set(stems.keys()) == {"drums", "bass", "vocals", "other"}
+
+    stem_urls = final_status["stem_urls"]
+    assert set(stem_urls.keys()) == {"drums", "bass", "vocals", "other"}
+    assert final_status["filename"] == "production_track.wav"
+    assert final_status["loudness"] is not None
+    assert "integrated_loudness_lufs" in final_status["loudness"]
 
     stem_details = final_status["stem_details"]
     sample_counts = []
 
-    for name in ["drums", "bass", "vocals", "other"]:
-        info = stem_details[name]
-        assert info["sample_rate"] == 48000
-        sample_counts.append(info["sample_count"])
+    try:
+        for name in ["drums", "bass", "vocals", "other"]:
+            info = stem_details[name]
+            assert info["sample_rate"] == 48000
+            assert info["url"] == stem_urls[name]
+            sample_counts.append(info["sample_count"])
 
-        # Read generated file on disk
-        stem_path = info["file_path"]
-        data, sr = sf.read(stem_path)
-        assert sr == 48000
-        assert data.shape[1] == 2  # Stereo
+            # Read generated file on disk
+            stem_path = info["file_path"]
+            data, sr = sf.read(stem_path)
+            assert sr == 48000
+            assert data.shape[1] == 2  # Stereo
 
-    # 3. Assert sample-accurate length alignment across all 4 stems
-    assert len(set(sample_counts)) == 1, f"Mismatch in sample lengths: {sample_counts}"
+            # Verify HTTP streaming endpoint returns valid 48kHz stereo WAV bytes
+            dl_resp = client.get(stem_urls[name])
+            assert dl_resp.status_code == 200
+            assert dl_resp.headers["content-type"].startswith("audio/wav")
+            dl_data, dl_sr = sf.read(io.BytesIO(dl_resp.content))
+            assert dl_sr == 48000
+            assert dl_data.shape == data.shape
+
+        # 3. Assert sample-accurate length alignment across all 4 stems
+        assert len(set(sample_counts)) == 1, f"Mismatch in sample lengths: {sample_counts}"
+
+        # 4. Verify session listing exposes the completed session
+        sessions_resp = client.get("/api/stems/sessions")
+        assert sessions_resp.status_code == 200
+        session_ids = [s["job_id"] for s in sessions_resp.json()["sessions"]]
+        assert job_id in session_ids
+    finally:
+        shutil.rmtree(config.SESSIONS_DIR / job_id, ignore_errors=True)
+
+
+def test_stem_download_validation():
+    bad_job = client.get("/api/stems/files/..invalid/drums.wav")
+    assert bad_job.status_code == 400
+
+    bad_stem = client.get(f"/api/stems/files/{'a' * 32}/malicious.wav")
+    assert bad_stem.status_code == 404
+
+    missing_job = client.get(f"/api/stems/files/{'0' * 32}/drums.wav")
+    assert missing_job.status_code == 404
 
 
 def test_invalid_extension():

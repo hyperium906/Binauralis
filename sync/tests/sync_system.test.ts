@@ -139,6 +139,71 @@ async function testLiveMultiClientSync() {
     await server.stop();
 }
 
+// =============================================================================
+// Test 4: Shared Room Track Sync & First-Sample Clock Offset Priming
+// =============================================================================
+async function testTrackSyncAndEarlyClockOffset() {
+    console.log('[Test 4] Shared Room Track Sync & Immediate Clock Priming... ');
+
+    const clock = new ClockSync({ minSamplesForSync: 4 });
+    clock.handlePong({ type: 'PONG', clientTime: 100, serverTime: 5110, seq: 1 }, 120);
+    assert(clock.hasOffset(), 'Clock should prime offset on the first PONG sample');
+    assert(Math.abs(clock.getOffset() - 5000) < 0.01, `Unexpected first-sample offset: ${clock.getOffset()}`);
+    assert(!clock.isSynchronized(), 'Clock should remain unsynced until minSamplesForSync are collected');
+
+    const TEST_PORT = 9877;
+    const server = new AuraStreamSyncServer(TEST_PORT);
+    await server.start();
+
+    const serverUrl = `ws://localhost:${TEST_PORT}`;
+    const ROOM = 'track-sync-room';
+
+    let receivedTrackTitle = '';
+    let lateJoinerTrackTitle = '';
+
+    const clientA = new SyncClient(serverUrl, ROOM, 'host_A');
+    const clientB = new SyncClient(serverUrl, ROOM, 'peer_B', {
+        onTrackSync: (track) => {
+            receivedTrackTitle = track.title;
+        }
+    });
+
+    await clientA.connect(WebSocket);
+    await clientB.connect(WebSocket);
+
+    clientA.broadcastTrack({
+        jobId: '0123456789abcdef0123456789abcdef',
+        title: 'anechoic_demo.wav',
+        mode: 'service',
+        stemUrls: {
+            drums: '/api/stems/files/0123456789abcdef0123456789abcdef/drums.wav',
+            bass: '/api/stems/files/0123456789abcdef0123456789abcdef/bass.wav',
+            vocals: '/api/stems/files/0123456789abcdef0123456789abcdef/vocals.wav',
+            other: '/api/stems/files/0123456789abcdef0123456789abcdef/other.wav'
+        }
+    });
+
+    await new Promise(r => setTimeout(r, 60));
+    assert.strictEqual(receivedTrackTitle, 'anechoic_demo.wav', 'Peer B did not receive SYNC_TRACK');
+
+    // Late joiner should inherit the room's active track inside ROOM_STATE
+    const clientC = new SyncClient(serverUrl, ROOM, 'late_C', {
+        onRoomState: (state) => {
+            lateJoinerTrackTitle = state.track?.title || '';
+        }
+    });
+    await clientC.connect(WebSocket);
+    await new Promise(r => setTimeout(r, 60));
+    assert.strictEqual(lateJoinerTrackTitle, 'anechoic_demo.wav', 'Late joiner did not receive room track');
+
+    console.log('PASSED (First-sample offset primed; SYNC_TRACK & late-joiner state verified)');
+
+    clientA.disconnect();
+    clientB.disconnect();
+    clientC.disconnect();
+    await server.stop();
+}
+
 async function runAllSyncTests() {
     console.log('\n===========================================================');
     console.log('  AuraStream Multi-Client Real-Time Sync Test Suite');
@@ -147,6 +212,7 @@ async function runAllSyncTests() {
     await testClockSyncConvergence();
     testJitterBufferSplineContinuity();
     await testLiveMultiClientSync();
+    await testTrackSyncAndEarlyClockOffset();
 
     console.log('\nAll Multi-Client Synchronization tests PASSED successfully!\n');
 }

@@ -95,7 +95,8 @@ wasm: $(BUILD_DIR)
 standalone_wasm: $(BUILD_DIR)
 	@echo "Compiling Standalone WebAssembly binary (-O3, -msimd128, STANDALONE_WASM=1)..."
 	$(EMCXX) $(STANDALONE_WASM_FLAGS) $(SRCS) -o $(BUILD_DIR)/aurastream_standalone.wasm
-	@echo "Generated $(BUILD_DIR)/aurastream_standalone.wasm"
+	@cp $(BUILD_DIR)/aurastream_standalone.wasm frontend/public/aurastream_standalone.wasm
+	@echo "Generated $(BUILD_DIR)/aurastream_standalone.wasm and synced to frontend/public/"
 
 # ------------------------------------------------------------------------------
 # FastAPI Microservice Targets
@@ -106,16 +107,19 @@ run_service:
 test_service:
 	@PYTHONPATH=. .venv/bin/pytest service/tests/ -v
 
-test_web:
+sync_worklet:
+	@cp web/SpatialWorkletProcessor.js frontend/public/SpatialWorkletProcessor.js
+
+test_web: sync_worklet
 	@node web/tests/test_web_engine.mjs
 
 # ------------------------------------------------------------------------------
 # Next.js 3D Spatial Canvas Frontend Targets
 # ------------------------------------------------------------------------------
-run_frontend:
+run_frontend: sync_worklet
 	@cd frontend && npm run dev
 
-build_frontend:
+build_frontend: sync_worklet
 	@cd frontend && npm run build
 
 test_frontend:
@@ -125,10 +129,10 @@ test_frontend:
 # Multi-Client Real-Time Synchronization Targets
 # ------------------------------------------------------------------------------
 run_sync:
-	@npx -y tsx sync/server.ts
+	@cd sync && ./node_modules/.bin/ts-node --compiler-options '{"module":"CommonJS"}' server.ts
 
 test_sync:
-	@npx -y tsx sync/tests/sync_system.test.ts
+	@cd sync && ./node_modules/.bin/ts-node --compiler-options '{"module":"CommonJS"}' tests/sync_system.test.ts
 
 clean:
 	rm -rf $(BUILD_DIR) $(BIN_DIR) storage/sessions/* storage/uploads/* frontend/.next
